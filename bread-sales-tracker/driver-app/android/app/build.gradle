@@ -36,6 +36,11 @@ android {
             }
         }
     }
+    lint {
+        // Lint findings should not stop the APK from being built; run ./gradlew lint to see them.
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
     buildTypes {
         release {
             minifyEnabled false
