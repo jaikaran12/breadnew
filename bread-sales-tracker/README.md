@@ -78,15 +78,16 @@ The website also works on a phone.
 | `admin-web/` | Owner website (React) |
 | `driver-app/` | Driver app (React) and its Android project (`driver-app/android`, made with Capacitor) |
 | `Dockerfile`, `docker-compose.yml`, `Caddyfile`, `deploy/` | Production setup: one container with everything, PostgreSQL, automatic HTTPS, daily backups |
-| `render.yaml` | One-click setup on Render.com (alternative to your own server) |
-| `../.github/workflows/bread-sales.yml` | GitHub Actions: tests, and **builds the Android APK** for you. This file has to sit in the repository's top-level `.github` folder |
+| `../render.yaml` | One-click setup on Render.com. Render only reads it from the top of the repository |
+| `../.github/workflows/bread-sales.yml` | GitHub Actions: tests, and **builds the Android APK** for you. GitHub only reads workflows from the top-level `.github` folder |
+| `../.github/workflows/bread-sales-live-check.yml` | “Run workflow” with your server address to check that the live server answers correctly |
 
 ---
 
 ## 1. Put the server online
 
 You need the server online before giving the app to drivers. Choose **A** (cheapest, your own small server)
-or **B** (no server to look after).
+or **B** (no server to look after — the quickest way to get started).
 
 ### A. Your own server (VPS) with Docker — recommended
 
@@ -126,18 +127,25 @@ Useful commands: `docker compose ps` (status), `docker compose logs -f app` (ser
 > Small VPS with 1 GB RAM? Building may run out of memory. Add swap first:
 > `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`
 
-### B. Render.com (no server to manage)
+### B. Render.com (no server to manage) — quickest
 
-1. Make an account at render.com and connect your GitHub.
-2. **New → Blueprint**, pick this repository and set the Blueprint file to `bread-sales-tracker/render.yaml`.
-   (If Render only looks at the repository root, copy `render.yaml` to the root first.)
-3. Fill in `ADMIN_PASSWORD` and `BUSINESS_NAME` when asked. Render creates the database and the web
-   service and gives you an `https://….onrender.com` address (you can add your own domain later).
-4. Cost: roughly $7/month for the web service (Starter) + $6/month for the database (Basic) — check Render's
-   current prices. Do not use the free plans for real data: free databases expire after 30 days and free web
-   services go to sleep.
+1. Open **https://render.com/deploy?repo=https://github.com/jaikaran12/breadnew** and sign up / log in
+   (“Sign in with GitHub” is easiest).
+2. Render shows the Blueprint from `render.yaml` (a web service `breadnew-sales` and a database). Fill in:
+   * `ADMIN_PASSWORD` — your password for the website (at least 8 characters)
+   * `BUSINESS_NAME` — e.g. *Sunrise Bakery*
 
-Paid Render databases include backups (see the database's Recovery / Backups page in the Render dashboard).
+   and click **Deploy Blueprint** / **Apply**.
+3. The first build takes about 5–10 minutes. Then open the web service in the Render dashboard; its address
+   looks like `https://breadnew-sales.onrender.com`. Log in with username `owner` and your password.
+4. **Plans:** the Blueprint starts on Render's **free** plans so you can try everything at no cost. Free
+   web services sleep after 15 idle minutes (the next visit takes about a minute), and **free databases
+   are deleted 30 days after creation**. Before drivers use it for real, upgrade in the Render dashboard:
+   the web service to **Starter** (~$7/month) and the database to **Basic** (~$6/month) — your data is kept.
+   Check Render's current prices.
+
+Every push to GitHub that changes `bread-sales-tracker/` redeploys automatically. Paid Render databases
+include backups (see the database's Recovery / Backups page in the Render dashboard).
 
 ---
 
@@ -171,37 +179,40 @@ GitHub builds the app for you (no Android Studio needed).
 
 ### One-time setup
 
-1. **Tell the app your server address:** in GitHub, open the repository → **Settings → Secrets and
-   variables → Actions → Variables → New repository variable**: name `API_BASE_URL`, value
-   `https://sales.mybakery.in` (your address from step 1, must start with `https://`).
-   If you skip this, the app asks for the address the first time it opens (tap “Server settings” on the
-   login screen).
-2. **Create the signing key** (needed so that app *updates* install over the old app). On any computer
+1. **Server address built into the app:** set `VITE_API_BASE_URL` in `driver-app/.env.android`
+   (e.g. `VITE_API_BASE_URL=https://breadnew-sales.onrender.com`, must start with `https://`) and push.
+   You can also set a repository variable `API_BASE_URL` instead (**Settings → Secrets and variables →
+   Actions → Variables**); it wins over the file. Without either, the app asks for the address the first
+   time it opens (“Server settings” on the login screen).
+2. **Signing key** (so that app *updates* install over the old app). Create it once on any computer
    with Java:
    ```bash
    cd bread-sales-tracker/driver-app
    sh scripts/create-android-keystore.sh
    ```
-   It prints four secrets to add under **Settings → Secrets and variables → Actions → Secrets**:
-   `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
-   **Keep the `.jks` file and password safe.** If you lose it, drivers must uninstall the app and install
-   it again.
+   and add two secrets under **Settings → Secrets and variables → Actions → Secrets**:
+   `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` (`ANDROID_KEY_ALIAS` defaults to `breadsales`,
+   `ANDROID_KEY_PASSWORD` to the keystore password). **Keep the `.jks` file and password safe and private.**
+   If you lose them, every driver must uninstall the app and install it again.
 
-   Without these secrets GitHub still builds a **TEST** APK (`…-TEST.apk`). It works, but every build has a
+   Without these secrets GitHub builds only a **TEST** APK (`…-TEST.apk`): it works, but every build has a
    different signature, so updates cannot be installed over it. Use it only for trying out the app.
 
 ### Getting the APK
 
-* Every push to GitHub runs **Actions → Bread Sales**. When it finishes, open the run and download
-  **bread-sales-android-…** (a zip containing the `.apk`).
-* For a release that's easy to share, create a tag: `git tag bread-sales-v1.0.0 && git push --tags`. The APK
-  then appears under the repository's **Releases**, and you can send that link to drivers.
-  Put that link in `APP_DOWNLOAD_URL` (in `.env`) so it is shown on the Drivers page.
+* **Release for drivers:** create a tag: `git tag bread-sales-v1.0.0 && git push --tags` (or ask Claude to do
+  it). GitHub builds the signed APK and publishes it under **Releases**. Drivers can always download the
+  newest version from one fixed link:
+  **https://github.com/jaikaran12/breadnew/releases/latest/download/bread-sales.apk**
+  (this link is also shown on the website's Drivers page via `APP_DOWNLOAD_URL`).
+* Every other push also builds an APK: open **Actions → Bread Sales → the run → Artifacts**.
 
 ### Installing on a driver's phone (Android 7 or newer)
 
-1. Send the `.apk` to the phone (WhatsApp or the Releases link) and tap it.
+1. Open the download link above on the phone (or send the `.apk` on WhatsApp) and tap the downloaded file.
+   Chrome may warn that the file can be harmful — choose **Download anyway**.
 2. Android asks to allow **“Install unknown apps”** for WhatsApp/Chrome — allow it, then **Install**.
+   If Play Protect shows a warning about an unknown app, choose **More details → Install anyway**.
 3. Open **Bread Sales**, choose हिंदी or English, enter the driver's mobile number and PIN.
 4. The app downloads the shop list and prices. From then on it works even without internet.
 

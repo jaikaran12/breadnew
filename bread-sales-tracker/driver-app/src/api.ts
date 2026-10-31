@@ -31,7 +31,8 @@ export function configureApi(options: { baseUrl: string; token: string | null })
   token = options.token;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, timeoutMs = 20000): Promise<T> {
+// 60 s: a server on a free hosting plan can take ~50 s to wake up after being idle.
+async function request<T>(method: string, path: string, body?: unknown, timeoutMs = 60000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const headers: Record<string, string> = { Accept: 'application/json' };

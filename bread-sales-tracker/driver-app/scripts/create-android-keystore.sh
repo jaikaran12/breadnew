@@ -21,12 +21,12 @@ keytool -genkeypair -keystore "$FILE" -alias "$ALIAS" -keyalg RSA -keysize 2048 
 base64 < "$FILE" | tr -d '\n' > "$FILE.base64.txt"
 cat <<MSG
 
-Done. Now add these in GitHub: your repository > Settings > Secrets and variables > Actions > New repository secret
+Done. Now add these two in GitHub: your repository > Settings > Secrets and variables > Actions > New repository secret
 
   ANDROID_KEYSTORE_BASE64   = the whole text inside $FILE.base64.txt
   ANDROID_KEYSTORE_PASSWORD = the password you just typed
-  ANDROID_KEY_ALIAS         = $ALIAS
-  ANDROID_KEY_PASSWORD      = the password you just typed
+
+(The key alias "$ALIAS" and key password = keystore password are the defaults, so nothing else is needed.)
 
 Then delete $FILE.base64.txt, and store $FILE + the password somewhere safe (e.g. Google Drive + password manager).
 NEVER commit $FILE to git.

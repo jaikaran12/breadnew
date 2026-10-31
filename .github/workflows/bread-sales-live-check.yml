@@ -1,0 +1,46 @@
+# Checks that the live Bread Sales server answers correctly (run it from the Actions tab: "Run workflow").
+name: Bread Sales live check
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Server address, e.g. https://breadnew-sales.onrender.com'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the live server
+        env:
+          URL: ${{ inputs.url }}
+        run: |
+          base="${URL%/}"
+          echo "Checking $base"
+          # A free server may be asleep: give it a few minutes to wake up.
+          for i in $(seq 1 15); do
+            if curl -fsS --max-time 90 "$base/api/health"; then echo; break; fi
+            echo "Not answering yet (attempt $i), waiting 20 s"
+            sleep 20
+          done
+          set -e
+          curl -fsS --max-time 60 "$base/api/health" | grep -q '"ok":true'
+          echo "OK  /api/health"
+          curl -fsS --max-time 60 "$base/" | grep -q '<title>Bread Sales'
+          echo "OK  admin website /"
+          curl -fsS --max-time 60 "$base/driver/" | grep -q 'id="root"'
+          echo "OK  driver web app /driver/"
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -X POST -H 'content-type: application/json' \
+            -d '{"phone":"0000000000","pin":"0000"}' "$base/api/driver/login")
+          [ "$code" = "401" ]
+          echo "OK  driver login refuses a wrong PIN (HTTP $code)"
+          curl -fsS --max-time 60 -o /dev/null -D headers.txt -X OPTIONS \
+            -H 'Origin: https://localhost' -H 'Access-Control-Request-Method: POST' \
+            -H 'Access-Control-Request-Headers: authorization,content-type' "$base/api/driver/sales"
+          grep -qi '^access-control-allow-origin: https://localhost' headers.txt
+          echo "OK  Android app is allowed to call the server (CORS)"
+          echo "All checks passed."

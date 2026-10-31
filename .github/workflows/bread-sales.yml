@@ -1,11 +1,12 @@
 # Bread Sales: tests + builds for everything in bread-sales-tracker/
 # - Every push: server tests (PostgreSQL), web builds, Docker image build, Android APK (downloadable from the run page).
-# - Push a tag like "bread-sales-v1.0.0": also publishes the APK as a GitHub Release.
+# - Push a tag like "bread-sales-v1.0.0": also publishes the APK as a GitHub Release. Drivers can always get the
+#   newest app from https://github.com/<owner>/<repo>/releases/latest/download/bread-sales.apk
 #
-# Optional settings (repository Settings > Secrets and variables > Actions):
-#   Variable  API_BASE_URL              your server, e.g. https://sales.mybakery.in (built into the app)
-#   Secrets   ANDROID_KEYSTORE_BASE64   release signing key (see bread-sales-tracker/README.md)
-#             ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Server address built into the app: driver-app/.env.android (VITE_API_BASE_URL), or the repository
+# variable API_BASE_URL if you set one (Settings > Secrets and variables > Actions > Variables).
+# Signing key (Settings > Secrets and variables > Actions > Secrets), see bread-sales-tracker/README.md:
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD   (ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD optional)
 name: Bread Sales
 
 on:
@@ -122,32 +123,42 @@ jobs:
           cache-dependency-path: bread-sales-tracker/driver-app/android/**/*.gradle*
       - run: npm ci
       - name: Build the app screens
-        run: npm run build:android
         env:
-          VITE_API_BASE_URL: ${{ vars.API_BASE_URL }}
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          if [ -n "$API_BASE_URL" ]; then export VITE_API_BASE_URL="$API_BASE_URL"; fi
+          echo "Server address built into the app: ${VITE_API_BASE_URL:-$(sed -n 's/^VITE_API_BASE_URL=//p' .env.android 2>/dev/null)}"
+          npm run build:android
       - name: Copy screens into the Android project
         run: npx cap sync android
       - name: Prepare signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          IS_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/bread-sales-v') }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
             echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Release signing key found."
+          elif [ "$IS_RELEASE_TAG" = "true" ]; then
+            echo "::error::A release needs the signing key. Add the ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD secrets (see README)."
+            exit 1
           else
             echo "::warning::No ANDROID_KEYSTORE_BASE64 secret - building a TEST (debug) APK. Set up a release key before giving the app to drivers (see README)."
           fi
       - name: Build APK
         working-directory: bread-sales-tracker/driver-app/android
         env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           mkdir -p "$GITHUB_WORKSPACE/apk"
           if [ -n "${ANDROID_KEYSTORE_FILE:-}" ]; then
+            export ANDROID_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD"
+            export ANDROID_KEY_ALIAS="${KEY_ALIAS:-breadsales}"
+            export ANDROID_KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
             ./gradlew --no-daemon assembleRelease
             cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/apk/bread-sales-$VERSION_NAME.apk"
           else
@@ -160,11 +171,24 @@ jobs:
           name: bread-sales-android-${{ env.VERSION_NAME }}
           path: apk/*.apk
           if-no-files-found: error
+      - name: Prepare release files (tags only)
+        if: startsWith(github.ref, 'refs/tags/bread-sales-v')
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p release
+          cp "apk/bread-sales-$VERSION_NAME.apk" "release/bread-sales-$VERSION_NAME.apk"
+          # Same file under a fixed name, so .../releases/latest/download/bread-sales.apk always works.
+          cp "apk/bread-sales-$VERSION_NAME.apk" release/bread-sales.apk
       - name: Publish GitHub Release (tags only)
         if: startsWith(github.ref, 'refs/tags/bread-sales-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: apk/*.apk
+          files: release/*.apk
           body: |
-            Android app for drivers. Download the .apk on the driver's phone and install it
-            (allow "Install unknown apps" for the browser / WhatsApp when asked).
+            **Bread Sales driver app ${{ env.VERSION_NAME }}**
+
+            Install on the driver's phone (Android 7 or newer): open this link on the phone, download, and tap Install
+            (allow "Install unknown apps" for Chrome or WhatsApp when asked):
+            https://github.com/${{ github.repository }}/releases/latest/download/bread-sales.apk
+
+            Updating: install the new APK over the old one. Bills already saved on the phone are kept.
