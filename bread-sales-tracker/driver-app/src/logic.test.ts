@@ -113,3 +113,29 @@ describe('product badge', () => {
     expect(productCode('मिल्क ब्रेड')).toBe('मब');
   });
 });
+
+describe('bill history cache', () => {
+  it('keeps an old day that was just opened even when many newer days are cached', async () => {
+    const { actions } = await import('./store');
+    const days: Record<string, { date: string; sales: []; settled: boolean; fetchedAt: number }> = {};
+    for (let i = 1; i <= 15; i++) {
+      const d = `2026-10-${String(i).padStart(2, '0')}`;
+      days[d] = { date: d, sales: [], settled: false, fetchedAt: i };
+    }
+    __setStateForTests({ history: days, auth: { token: 't', driver: { id: 5, name: 'R', phone: '9' } } });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ date: '2026-09-01', today: '2026-10-31', settled: true, sales: [], cancelWindowMinutes: 30 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch;
+    try {
+      await actions.loadDay('2026-09-01');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    const history = getState().history;
+    expect(history['2026-09-01']?.settled).toBe(true);
+    expect(Object.keys(history).length).toBeLessThanOrEqual(12);
+  });
+});

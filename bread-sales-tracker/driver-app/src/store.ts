@@ -178,15 +178,24 @@ function noteError(err: unknown) {
 
 // ---------- history helpers ----------
 
-function pruneHistory(history: Record<string, DayHistory>): Record<string, DayHistory> {
-  const dates = Object.keys(history).sort().reverse().slice(0, HISTORY_DAYS_KEPT);
-  return Object.fromEntries(dates.map((d) => [d, history[d]]));
+/** Keeps today, the given dates, and the most recently viewed days. */
+function pruneHistory(history: Record<string, DayHistory>, keep: string[] = []): Record<string, DayHistory> {
+  const must = new Set([today(), ...keep]);
+  const days = Object.values(history);
+  const others = days
+    .filter((d) => !must.has(d.date))
+    .sort((a, b) => b.fetchedAt - a.fetchedAt || b.date.localeCompare(a.date))
+    .slice(0, HISTORY_DAYS_KEPT);
+  const result: Record<string, DayHistory> = {};
+  for (const d of days) if (must.has(d.date)) result[d.date] = d;
+  for (const d of others) result[d.date] = d;
+  return result;
 }
 
 function upsertSale(history: Record<string, DayHistory>, sale: ServerSale): Record<string, DayHistory> {
   const day = history[sale.saleDate] ?? { date: sale.saleDate, sales: [], settled: false, fetchedAt: 0 };
   const sales = [sale, ...day.sales.filter((s) => s.clientId !== sale.clientId)];
-  return pruneHistory({ ...history, [sale.saleDate]: { ...day, sales } });
+  return pruneHistory({ ...history, [sale.saleDate]: { ...day, sales } }, [sale.saleDate]);
 }
 
 function linesFromServer(sale: ServerSale): BillLine[] {
@@ -412,7 +421,7 @@ async function loadDay(date: string): Promise<void> {
       const ids = new Set(res.sales.map((x) => x.clientId));
       const merged = [...res.sales, ...previous.filter((x) => !ids.has(x.clientId))];
       return {
-        history: pruneHistory({ ...s.history, [date]: { date, sales: merged, settled: res.settled, fetchedAt: Date.now() } }),
+        history: pruneHistory({ ...s.history, [date]: { date, sales: merged, settled: res.settled, fetchedAt: Date.now() } }, [date]),
         online: true,
       };
     });
