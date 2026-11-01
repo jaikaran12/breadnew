@@ -147,8 +147,11 @@ jobs:
             echo "No Android signing key secret yet - skipping."
             exit 0
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          fp=$(keytool -list -v -keystore "$RUNNER_TEMP/release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "${KEY_ALIAS:-breadsales}" \
+          # Spaces or line breaks copied along with a secret are ignored.
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/release.jks"
+          pass=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+          key_alias=$(printf '%s' "${KEY_ALIAS:-breadsales}" | tr -d ' \t\r\n')
+          fp=$(keytool -list -v -keystore "$RUNNER_TEMP/release.jks" -storepass "$pass" -alias "$key_alias" \
             | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -1)
           rm -f "$RUNNER_TEMP/release.jks"
           if [ -z "$fp" ]; then
@@ -210,7 +213,7 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            printf '%s' "$KEYSTORE_BASE64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/release.jks"
             echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Release signing key found."
           else

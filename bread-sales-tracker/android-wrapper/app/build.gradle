@@ -50,9 +50,10 @@ android {
         if (hasReleaseKey) {
             release {
                 storeFile file(keystorePath)
-                storePassword envOr('ANDROID_KEYSTORE_PASSWORD', '')
-                keyAlias envOr('ANDROID_KEY_ALIAS', 'breadsales')
-                keyPassword envOr('ANDROID_KEY_PASSWORD', envOr('ANDROID_KEYSTORE_PASSWORD', ''))
+                // trim(): a space or line break copied along with a secret must not break signing.
+                storePassword envOr('ANDROID_KEYSTORE_PASSWORD', '').trim()
+                keyAlias envOr('ANDROID_KEY_ALIAS', 'breadsales').trim()
+                keyPassword envOr('ANDROID_KEY_PASSWORD', envOr('ANDROID_KEYSTORE_PASSWORD', '')).trim()
             }
         }
     }
