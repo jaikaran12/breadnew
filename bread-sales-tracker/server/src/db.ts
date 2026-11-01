@@ -1,72 +1,66 @@
-import pg from 'pg';
-import type { Config } from './config.js';
+/**
+ * Database access used by the whole server. The same SQL (SQLite dialect) runs on:
+ *  - Cloudflare D1 in production (see db-d1.ts), and
+ *  - SQLite on a normal computer for tests and self-hosting (see db-sqlite.ts).
+ *
+ * Money is stored as whole paise (INTEGER), dates as 'YYYY-MM-DD' text and timestamps as ISO-8601 UTC text,
+ * so totals are exact and nothing depends on the server's time zone.
+ */
+export type Row = Record<string, unknown>;
 
-// Money is stored as whole paise (₹1 = 100 paise) in BIGINT columns, and sums come back
-// as NUMERIC. Both always fit safely in a JS number for this business, so parse them as
-// numbers instead of strings. DATE columns stay as 'YYYY-MM-DD' strings so that no time
-// zone conversion can ever shift a sale to the wrong day.
-pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v));
-pg.types.setTypeParser(pg.types.builtins.NUMERIC, (v) => Number(v));
-pg.types.setTypeParser(pg.types.builtins.DATE, (v) => v);
-
-export type Pool = pg.Pool;
-export type PoolClient = pg.PoolClient;
-
-/** Anything we can run a query on: the pool or a client inside a transaction. */
-export interface Queryable {
-  query<R extends pg.QueryResultRow = any>(text: string, values?: unknown[]): Promise<pg.QueryResult<R>>;
+export interface Statement {
+  sql: string;
+  params?: unknown[];
 }
 
-export function createPool(config: Pick<Config, 'databaseUrl' | 'databaseSsl'>): pg.Pool {
-  const ssl =
-    config.databaseSsl === 'no-verify'
-      ? { rejectUnauthorized: false }
-      : config.databaseSsl === 'verify'
-        ? true
-        : undefined;
-  const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 10, ssl });
-  pool.on('error', (err) => {
-    console.error('Unexpected database pool error', err);
-  });
-  return pool;
+export interface RunResult {
+  changes: number;
+  lastRowId: number;
+  rows: Row[];
 }
 
-export async function withTransaction<T>(pool: pg.Pool, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw err;
-  } finally {
-    client.release();
+export interface Db {
+  all<R = Row>(sql: string, params?: unknown[]): Promise<R[]>;
+  first<R = Row>(sql: string, params?: unknown[]): Promise<R | undefined>;
+  run(sql: string, params?: unknown[]): Promise<RunResult>;
+  /** Runs several statements as one all-or-nothing transaction. */
+  batch(statements: Statement[]): Promise<RunResult[]>;
+  /** Runs SQL text with several statements and no parameters (schema changes). */
+  exec(sql: string): Promise<void>;
+}
+
+/** Values the drivers accept: booleans become 1/0, dates become ISO text, undefined becomes NULL. */
+export function normalizeParam(value: unknown): unknown {
+  if (value === undefined) return null;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (value instanceof Date) return value.toISOString();
+  return value;
+}
+
+/** Columns named isSomething hold 0/1 in SQLite; give them back to the app as true/false. */
+export function normalizeRow(row: Row): Row {
+  const out: Row = {};
+  for (const [key, value] of Object.entries(row)) {
+    out[key] = /^is[A-Z]/.test(key) && (value === 0 || value === 1) ? value === 1 : value;
   }
+  return out;
 }
 
-export async function many<R extends pg.QueryResultRow = any>(
-  db: Queryable,
-  text: string,
-  values: unknown[] = [],
-): Promise<R[]> {
-  const result = await db.query<R>(text, values);
-  return result.rows;
+export function returnsRows(sql: string): boolean {
+  return /^\s*(SELECT|WITH|PRAGMA)\b/i.test(sql) || /\bRETURNING\b/i.test(sql);
 }
-
-export async function one<R extends pg.QueryResultRow = any>(
-  db: Queryable,
-  text: string,
-  values: unknown[] = [],
-): Promise<R | undefined> {
-  const result = await db.query<R>(text, values);
-  return result.rows[0];
-}
-
-/** Postgres error code for unique_violation */
-export const UNIQUE_VIOLATION = '23505';
 
 export function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: string }).code === UNIQUE_VIOLATION;
+  const message = err instanceof Error ? err.message : String(err);
+  return /UNIQUE constraint failed/i.test(message);
+}
+
+/** Current time as stored in the database. */
+export function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** Escapes % and _ for LIKE ... ESCAPE '\\'. */
+export function likePattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 }

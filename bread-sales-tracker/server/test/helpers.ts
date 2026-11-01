@@ -1,25 +1,50 @@
 import request from 'supertest';
-import type { Express } from 'express';
+import express, { type Express } from 'express';
 import { createApp } from '../src/app.js';
 import { loadConfig, type Config } from '../src/config.js';
-import { createPool, type Pool } from '../src/db.js';
+import type { Db, Statement } from '../src/db.js';
+import { openSqliteDb } from '../src/db-sqlite.js';
 import { migrate } from '../src/migrate.js';
 import { ensureInitialAdmin } from '../src/services/bootstrap.js';
 
-export const TEST_DB_URL = process.env.TEST_DATABASE_URL ?? 'postgres://bread:bread@localhost:5432/bread_test';
 export const ADMIN = { username: 'owner', password: 'owner-pass-123' };
+
+/**
+ * Cloudflare D1 limits the app must stay under: at most 100 values bound to one statement, and a limited
+ * number of queries per request (we aim for far fewer than 50). The tests record the largest values seen.
+ */
+export const D1_MAX_PARAMS = 100;
+export const QUERY_BUDGET_PER_REQUEST = 25;
+export const usage = { maxParams: 0, maxQueriesPerRequest: 0, worstRequest: '' };
 
 export interface TestContext {
   config: Config;
-  pool: Pool;
+  db: Db;
   app: Express;
+  close(): void;
 }
 
-/** Fresh empty database + app for a test file. */
+/** Wraps the database to count statements per HTTP request and check the bound-value limit. */
+function measured(db: Db, counter: { n: number }): Db {
+  const check = (s: Statement) => {
+    counter.n++;
+    const n = s.params?.length ?? 0;
+    if (n > D1_MAX_PARAMS) throw new Error(`Statement binds ${n} values (D1 allows ${D1_MAX_PARAMS}): ${s.sql.slice(0, 80)}`);
+    usage.maxParams = Math.max(usage.maxParams, n);
+  };
+  return {
+    all: (sql, params) => (check({ sql, params }), db.all(sql, params)),
+    first: (sql, params) => (check({ sql, params }), db.first(sql, params)),
+    run: (sql, params) => (check({ sql, params }), db.run(sql, params)),
+    batch: (statements) => (statements.forEach(check), db.batch(statements)),
+    exec: (sql) => db.exec(sql),
+  } as Db;
+}
+
+/** Fresh empty in-memory database + app for a test file. */
 export async function setupTestApp(overrides: Record<string, string> = {}): Promise<TestContext> {
   const config = loadConfig({
     NODE_ENV: 'test',
-    DATABASE_URL: TEST_DB_URL,
     JWT_SECRET: 'test-secret-test-secret-test-secret-123',
     APP_TIMEZONE: 'Asia/Kolkata',
     LOGIN_RATE_LIMIT: '1000',
@@ -28,11 +53,24 @@ export async function setupTestApp(overrides: Record<string, string> = {}): Prom
     PUBLIC_DIR: '/nonexistent-public-dir',
     ...overrides,
   });
-  const pool = createPool(config);
-  await pool.query('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;');
-  await migrate(pool, () => undefined);
-  await ensureInitialAdmin(pool, config, () => undefined);
-  return { config, pool, app: createApp(config, pool) };
+  const sqlite = openSqliteDb(':memory:');
+  await migrate(sqlite, () => undefined);
+  await ensureInitialAdmin(sqlite, config, () => undefined);
+  const counter = { n: 0 };
+  const inner = createApp(config, measured(sqlite, counter));
+  const app = express();
+  app.use((req, res, next) => {
+    counter.n = 0;
+    res.on('finish', () => {
+      if (counter.n > usage.maxQueriesPerRequest) {
+        usage.maxQueriesPerRequest = counter.n;
+        usage.worstRequest = `${req.method} ${req.originalUrl}`;
+      }
+    });
+    next();
+  });
+  app.use(inner);
+  return { config, db: sqlite, app, close: () => sqlite.close() };
 }
 
 export async function loginAdmin(app: Express) {

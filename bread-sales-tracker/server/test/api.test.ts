@@ -1,6 +1,16 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ADMIN, loginAdmin, seedBasics, setupTestApp, uuid, type TestContext } from './helpers.js';
+import {
+  ADMIN,
+  D1_MAX_PARAMS,
+  loginAdmin,
+  QUERY_BUDGET_PER_REQUEST,
+  seedBasics,
+  setupTestApp,
+  usage,
+  uuid,
+  type TestContext,
+} from './helpers.js';
 
 let ctx: TestContext;
 let s: Awaited<ReturnType<typeof seedBasics>>;
@@ -28,8 +38,8 @@ beforeAll(async () => {
   s = await seedBasics(ctx.app);
 });
 
-afterAll(async () => {
-  await ctx.pool.end();
+afterAll(() => {
+  ctx.close();
 });
 
 describe('health', () => {
@@ -94,7 +104,7 @@ describe('catalog', () => {
       ['Brown Bread', 4250],
       ['Pav (6 pcs)', 2500],
     ]);
-    expect(res.body.version).toMatch(/^[0-9a-f]{16}$/);
+    expect(res.body.version).toMatch(/^r\d+-c\d+$/);
     expect(res.headers['access-control-allow-origin']).toBeUndefined(); // no Origin header sent
   });
 
@@ -129,8 +139,8 @@ describe('creating bills', () => {
     const again = await request(ctx.app).post('/api/driver/sales').set(auth(s.token)).send(body).expect(200);
     expect(again.body.created).toBe(false);
     expect(again.body.sale.id).toBe(first.body.sale.id);
-    const count = await ctx.pool.query('SELECT count(*)::int AS n FROM sales WHERE client_id = $1', [body.clientId]);
-    expect(count.rows[0].n).toBe(1);
+    const count = await ctx.db.first<{ n: number }>('SELECT count(*) AS n FROM sales WHERE client_id = ?1', [body.clientId]);
+    expect(count?.n).toBe(1);
   });
 
   it('rejects a bill whose total does not match the items', async () => {
@@ -325,7 +335,7 @@ describe('admin: sales, tally and reports', () => {
 
   beforeAll(async () => {
     // Separate clean database so the numbers below are exact.
-    await ctx.pool.end();
+    ctx.close();
     ctx2 = await setupTestApp();
     ctx = ctx2;
     t = await seedBasics(ctx2.app);
@@ -336,7 +346,7 @@ describe('admin: sales, tally and reports', () => {
     return (await request(ctx2.app).post('/api/driver/sales').set(auth(token)).send(bill(overrides)).expect(201)).body.sale;
   }
 
-  it('lists bills with filters and totals, and exports CSV', async () => {
+  it('lists bills with filters and totals, and pages through a day for export', async () => {
     await sell(t.token, { paymentMode: 'cash' }); // 205
     await sell(t.token, { paymentMode: 'upi', storeId: t.store2.id }); // 205
     await sell(t.token, {
@@ -360,12 +370,14 @@ describe('admin: sales, tally and reports', () => {
     const search = await t.admin.get('/api/admin/sales').query({ q: 'sharma' }).expect(200);
     expect(search.body.total).toBe(2);
 
-    const csv = await t.admin.get('/api/admin/sales/export.csv').query({ type: 'items' }).expect(200);
-    expect(csv.headers['content-type']).toMatch(/text\/csv/);
-    const lines = csv.text.trim().split('\r\n');
-    expect(lines).toHaveLength(1 + 5); // header + 2 + 2 + 1 lines
-    expect(lines[0]).toContain('Product');
-    expect(csv.text).toContain('42.50');
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    const page = await t.admin.get('/api/admin/sales/export').query({ date: today }).expect(200);
+    expect(page.body.nextOffset).toBeNull();
+    expect(page.body.sales.map((x: { paymentMode: string }) => x.paymentMode)).toEqual(['cash', 'upi', 'credit']); // oldest first
+    expect(page.body.sales.flatMap((x: { items: unknown[] }) => x.items)).toHaveLength(5);
+    const filtered = await t.admin.get('/api/admin/sales/export').query({ date: today, paymentMode: 'upi' }).expect(200);
+    expect(filtered.body.sales).toHaveLength(1);
+    await t.admin.get('/api/admin/sales/export').query({ date: 'yesterday' }).expect(400);
   });
 
   it('cancels and restores a bill from the admin site', async () => {
@@ -438,9 +450,9 @@ describe('admin: sales, tally and reports', () => {
     expect(day.body.rows).toHaveLength(1);
     expect(day.body.rows[0].amountPaise).toBe(66000);
 
-    const csv = await t.admin.get('/api/admin/reports').query({ groupBy: 'product', format: 'csv' }).expect(200);
-    expect(csv.text).toContain('Milk Bread');
-    expect(csv.text).toContain('240.00');
+    expect(day.body.rows[0].sublabel).toBe(
+      new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' }).format(new Date(`${day.body.rows[0].key}T00:00:00Z`)),
+    );
   });
 
   it('shows the dashboard for today', async () => {
@@ -450,8 +462,10 @@ describe('admin: sales, tally and reports', () => {
     expect(res.body.totals.storesVisited).toBe(2);
     expect(res.body.totals.activeDrivers).toBe(1);
     expect(res.body.totals.cancelledBills).toBe(2);
-    expect(res.body.trend).toHaveLength(14);
-    expect(res.body.trend[13].totalPaise).toBe(66000);
+    const trend = await t.admin.get('/api/admin/dashboard/trend').expect(200);
+    expect(trend.body.trend).toHaveLength(14);
+    expect(trend.body.trend[13]).toMatchObject({ date: res.body.today, bills: 3, totalPaise: 66000 });
+    expect(trend.body.trend[0].totalPaise).toBe(0);
     expect(res.body.byProduct).toHaveLength(3);
     expect(res.body.recent.length).toBe(5);
     expect(res.body.counts).toEqual({ stores: 2, products: 3, drivers: 1, areas: 2 });
@@ -465,6 +479,14 @@ describe('admin: sales, tally and reports', () => {
     const list = await t.admin.get('/api/admin/stores').query({ sort: 'sales30' }).expect(200);
     expect(list.body.stores[0].name).toBe('Sharma Kirana');
     expect(list.body.stores[0].amount30Paise).toBe(45500);
+    expect(list.body.stores[0].bills30).toBe(2);
+    expect(list.body.stores[0].lastSaleAt).toBeTruthy();
+    const lastVisit = await t.admin.get('/api/admin/stores').query({ sort: 'lastVisit' }).expect(200);
+    expect(lastVisit.body.stores.every((x: { lastSaleAt: string | null }) => x.lastSaleAt)).toBe(true);
+    // Every shop had a bill today, so none is "not visited for 3 days"; a new shop without bills is.
+    await t.admin.post('/api/admin/stores').send({ areaId: t.area.id, name: 'Quiet Corner Store' }).expect(201);
+    const notVisited = await t.admin.get('/api/admin/stores').query({ notVisitedDays: 3 }).expect(200);
+    expect(notVisited.body.stores.map((x: { name: string }) => x.name)).toEqual(['Quiet Corner Store']);
   });
 });
 
@@ -501,6 +523,21 @@ describe('admin: shop import', () => {
     expect(res.body.areasCreated).toEqual(['Railway Colony']);
   });
 
+  it('imports a long list (hundreds of shops, new areas) in one go', async () => {
+    const lines = ['Area,Shop name,Phone'];
+    for (let i = 1; i <= 650; i++) lines.push(`Big Area ${(i % 25) + 1},Shop number ${i},90000${String(i).padStart(5, '0')}`);
+    const res = await s.admin.post('/api/admin/stores/import').send({ csv: lines.join('\n') }).expect(200);
+    expect(res.body).toMatchObject({ storesCreated: 650, skippedExisting: 0, errors: [] });
+    expect(res.body.areasCreated).toHaveLength(25);
+    const area7 = (await s.admin.get('/api/admin/areas').expect(200)).body.areas.find((a: { name: string }) => a.name === 'Big Area 7');
+    expect(area7.storeCount).toBe(26);
+    const list = await s.admin.get('/api/admin/stores').query({ areaId: area7.id, sort: 'name', pageSize: 10, page: 2 }).expect(200);
+    expect(list.body.total).toBe(26);
+    expect(list.body.stores).toHaveLength(10);
+    const catalog = await request(ctx.app).get('/api/driver/catalog').set(auth(s.token)).expect(200);
+    expect(catalog.body.stores.length).toBeGreaterThan(650);
+  });
+
   it('rejects a file without the needed columns', async () => {
     await s.admin.post('/api/admin/stores/import').send({ csv: 'foo,bar\n1,2' }).expect(400);
   });
@@ -527,5 +564,13 @@ describe('admin: accounts and settings', () => {
     await manager.get('/api/admin/me').expect(200);
     await agent.delete(`/api/admin/admins/${other.body.admin.id}`).expect(200);
     await manager.get('/api/admin/me').expect(401);
+  });
+});
+
+describe('Cloudflare D1 limits', () => {
+  it('never binds more than 100 values to one statement and keeps queries per request low', () => {
+    expect(usage.maxParams).toBeGreaterThan(0);
+    expect(usage.maxParams).toBeLessThanOrEqual(D1_MAX_PARAMS);
+    expect(usage.maxQueriesPerRequest, usage.worstRequest).toBeLessThanOrEqual(QUERY_BUDGET_PER_REQUEST);
   });
 });

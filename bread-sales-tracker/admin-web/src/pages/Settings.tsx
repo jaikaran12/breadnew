@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, downloadUrl } from '../api';
+import { api } from '../api';
 import { useAuth } from '../auth';
-import { Card, ErrorBox, Field, PageHeader, toast } from '../components/ui';
+import { Card, DownloadButton, ErrorBox, Field, PageHeader, toast } from '../components/ui';
+import { downloadBackup } from '../exporting';
 import { ago, dateTime } from '../format';
 
 export function SettingsPage() {
@@ -45,11 +46,6 @@ function BackupCard() {
   useEffect(() => {
     if (window.location.hash === '#backup') ref.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
-  const started = () => {
-    // The file downloads in the background; refresh "last backup" once it has had time to finish.
-    setTimeout(() => void refresh(), 4000);
-    setTimeout(() => void refresh(), 15000);
-  };
   return (
     <section id="backup" ref={ref}>
       <Card title="Backup of your data">
@@ -60,12 +56,18 @@ function BackupCard() {
         <p className="muted small">
           Last backup: {me?.lastBackupAt ? `${dateTime(me.lastBackupAt)} (${ago(me.lastBackupAt)})` : 'never'}
         </p>
-        <a className="btn btn-primary" href={downloadUrl('/backup')} onClick={started}>
-          Download backup now
-        </a>
+        <DownloadButton
+          className="btn btn-primary"
+          label="Download backup now"
+          run={downloadBackup}
+          onDone={() => {
+            toast('Backup downloaded');
+            void refresh();
+          }}
+        />
         <p className="muted small">
-          To bring a backup back (for example on a new server), see “Backups” in the README. The file contains your
-          business data, so do not share it.
+          Cloudflare also keeps its own copy of recent days, so a recent mistake can be undone (see “Backups” in the
+          README). The file contains your business data, so do not share it.
         </p>
       </Card>
     </section>

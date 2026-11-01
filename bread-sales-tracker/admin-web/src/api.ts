@@ -52,8 +52,3 @@ export const api = {
   put: <T,>(path: string, body: unknown) => request<T>('PUT', path, body),
   del: <T,>(path: string, query?: Query) => request<T>('DELETE', `${path}${qs(query)}`),
 };
-
-/** URL for a CSV download (uses the login cookie). */
-export function downloadUrl(path: string, query?: Query): string {
-  return `/api/admin${path}${qs(query)}`;
-}

@@ -1,0 +1,33 @@
+// Cloudflare Workers settings (free plan). Deployed by .github/workflows/bread-sales-deploy.yml.
+// Local test: npm run build:site && npx wrangler d1 migrations apply bread-sales --local && npx wrangler dev
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "bread-sales",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The admin website (/) and driver app (/driver/) are plain files; only the API runs code.
+  "assets": {
+    "directory": "./site",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/.well-known/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bread-sales",
+      // Filled in by the deploy workflow (it creates the database the first time).
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Settings (not secret). Secrets JWT_SECRET and ADMIN_PASSWORD are set by the deploy workflow.
+  "vars": {
+    "APP_TIMEZONE": "Asia/Kolkata",
+    "ADMIN_USERNAME": "owner",
+    "BUSINESS_NAME": "My Bakery",
+    "DRIVER_CANCEL_WINDOW_MINUTES": "30",
+    "LOG_REQUESTS": "false"
+  },
+  "observability": { "enabled": true }
+}

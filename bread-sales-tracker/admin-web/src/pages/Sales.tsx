@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { api, downloadUrl } from '../api';
+import { api } from '../api';
 import { SaleModal } from '../components/SaleModal';
-import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, Pager, PaymentBadge, RangePicker } from '../components/ui';
+import { Badge, Card, DownloadButton, Empty, ErrorBox, Loading, PageHeader, Pager, PaymentBadge, RangePicker } from '../components/ui';
+import { fetchSalesForExport, saveCsv, salesCsv } from '../exporting';
 import { dateTime, num, rupees, shortDate, time, todayIn } from '../format';
 import { useAreas, useDrivers } from '../lookups';
 import { useIdle } from '../idle';
@@ -66,7 +67,8 @@ export function SalesPage() {
   const q = useQuery({
     queryKey: ['sales', query, filters.page],
     queryFn: () => api.get<SalesResponse>('/sales', { ...query, page: filters.page, pageSize: 50 }),
-    refetchInterval: filters.to === today && !idle ? 30_000 : false,
+    // Live update once a minute while someone is looking at today's bills.
+    refetchInterval: filters.to >= today && !idle ? 60_000 : false,
   });
   const multiDay = filters.from !== filters.to;
   const s = q.data?.summary;
@@ -78,12 +80,17 @@ export function SalesPage() {
         subtitle="Every bill made by the drivers. Click a bill to see the items or cancel it."
         actions={
           <>
-            <a className="btn btn-light" href={downloadUrl('/sales/export.csv', { ...query, type: 'bills' })}>
-              Download bills (CSV)
-            </a>
-            <a className="btn btn-light" href={downloadUrl('/sales/export.csv', { ...query, type: 'items' })}>
-              Download items (CSV)
-            </a>
+            {(['bills', 'items'] as const).map((type) => (
+              <DownloadButton
+                key={type}
+                label={type === 'bills' ? 'Download bills (CSV)' : 'Download items (CSV)'}
+                run={async (progress) => {
+                  const sales = await fetchSalesForExport(query, progress);
+                  const { header, rows } = salesCsv(sales, type);
+                  saveCsv(`sales-${type}-${query.from}-to-${query.to}.csv`, header, rows);
+                }}
+              />
+            ))}
           </>
         }
       />

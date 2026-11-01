@@ -1,33 +1,15 @@
-# Production setup for one server (VPS): database + app + automatic HTTPS + daily backups.
+# Optional: run everything on your own server (VPS) instead of Cloudflare: app + automatic HTTPS.
 #   1. cp .env.example .env   and fill it in
 #   2. docker compose up -d --build
+# The data is one SQLite file in the "app-data" volume. Download backups from the website (Settings).
 name: bread-sales
 
 services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: bread
-      POSTGRES_USER: bread
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    volumes:
-      - db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U bread -d bread']
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   app:
     build: .
     image: bread-sales:latest
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://bread:${POSTGRES_PASSWORD}@db:5432/bread
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-owner}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
@@ -35,8 +17,11 @@ services:
       APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Kolkata}
       APP_DOWNLOAD_URL: ${APP_DOWNLOAD_URL:-}
       DRIVER_CANCEL_WINDOW_MINUTES: ${DRIVER_CANCEL_WINDOW_MINUTES:-30}
+      ANDROID_CERT_SHA256: ${ANDROID_CERT_SHA256:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       TRUST_PROXY: '1'
+    volumes:
+      - app-data:/app/data
     ports:
       # Only reachable from the server itself (for checks). Everyone else goes through Caddy (HTTPS).
       - '127.0.0.1:8080:8080'
@@ -57,24 +42,7 @@ services:
       - caddy-data:/data
       - caddy-config:/config
 
-  backup:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      PGHOST: db
-      PGUSER: bread
-      PGDATABASE: bread
-      PGPASSWORD: ${POSTGRES_PASSWORD}
-      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
-    volumes:
-      - ./backups:/backups
-      - ./deploy/backup-loop.sh:/backup-loop.sh:ro
-    entrypoint: ['/bin/sh', '/backup-loop.sh']
-
 volumes:
-  db-data:
+  app-data:
   caddy-data:
   caddy-config:

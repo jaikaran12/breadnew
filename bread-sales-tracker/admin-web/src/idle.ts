@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 
 /**
  * True when nobody has touched the page for `minutes`. Used to pause live auto-refresh, so a dashboard
- * left open overnight does not keep the (free) server and database awake.
+ * left open all day does not use up the free database's daily allowance.
  */
-export function useIdle(minutes = 20): boolean {
+export function useIdle(minutes = 10): boolean {
   const [idle, setIdle] = useState(false);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;

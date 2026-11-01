@@ -1,10 +1,15 @@
 /* Service worker for the driver app (in Chrome and inside the Android wrapper app).
    - Opens instantly: the saved copy of the app is shown at once, and a fresh copy is downloaded in the
-     background for next time (the free server may need a minute to wake up).
+     background for next time (even on a slow mobile connection).
    - Works without internet: all app files are kept on the phone.
    Bills themselves are stored by the app (localStorage), not here. API calls are never cached. */
 const CACHE = 'breadsales-driver-v2';
 const SHELL = './';
+
+/** A real app file, not the website's fallback page (sent with status 200 for paths that do not exist). */
+function isAppFile(res) {
+  return res.ok && !(res.headers.get('content-type') || '').includes('text/html');
+}
 
 function assetUrls(html) {
   return [...html.matchAll(/(?:src|href)="\.?\/?((?:assets\/[^"]+)|icon\.svg|manifest\.webmanifest|icons\/[^"]+)"/g)].map(
@@ -16,14 +21,14 @@ function assetUrls(html) {
 async function refreshShell() {
   const cache = await caches.open(CACHE);
   const res = await fetch(SHELL, { cache: 'no-store' });
-  if (!res.ok) return;
+  if (!res.ok || !(res.headers.get('content-type') || '').includes('text/html')) return;
   const html = await res.clone().text();
   const assets = assetUrls(html);
   await Promise.all(
     assets.map(async (url) => {
       if (await cache.match(url)) return;
       const r = await fetch(url);
-      if (!r.ok) throw new Error(`asset ${url} ${r.status}`);
+      if (!isAppFile(r)) throw new Error(`asset ${url} ${r.status}`);
       await cache.put(url, r);
     }),
   );
@@ -81,7 +86,7 @@ self.addEventListener('fetch', (event) => {
       (hit) =>
         hit ||
         fetch(req).then((res) => {
-          if (res.ok && (url.pathname.includes('/assets/') || url.pathname.includes('/icons/'))) {
+          if (isAppFile(res) && (url.pathname.includes('/assets/') || url.pathname.includes('/icons/'))) {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy));
           }

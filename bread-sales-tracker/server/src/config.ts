@@ -5,8 +5,8 @@ export interface Config {
   nodeEnv: string;
   isProduction: boolean;
   port: number;
-  databaseUrl: string;
-  databaseSsl: false | 'verify' | 'no-verify';
+  /** SQLite file used when running with Node (tests, self-hosting). Not used on Cloudflare. */
+  databasePath: string;
   jwtSecret: string;
   /** IANA time zone used to decide which calendar day a sale belongs to. */
   appTimezone: string;
@@ -29,7 +29,14 @@ export interface Config {
   androidCertFingerprints: string[];
 }
 
-const here = path.dirname(fileURLToPath(import.meta.url));
+// On Cloudflare there is no file system path for this module; paths are only used when running with Node.
+const here = (() => {
+  try {
+    return path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return '/';
+  }
+})();
 
 function bool(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value === '') return fallback;
@@ -43,13 +50,11 @@ function int(value: string | undefined, fallback: number, name: string): number 
   return n;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+type Env = Record<string, string | undefined>;
+
+export function loadConfig(env: Env = process.env): Config {
   const nodeEnv = env.NODE_ENV ?? 'development';
   const isProduction = nodeEnv === 'production';
-
-  const databaseUrl =
-    env.DATABASE_URL ?? (isProduction ? '' : 'postgres://bread:bread@localhost:5432/bread_dev');
-  if (!databaseUrl) throw new Error('DATABASE_URL is required');
 
   let jwtSecret = env.JWT_SECRET ?? '';
   if (!jwtSecret) {
@@ -75,16 +80,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     else trustProxy = raw;
   }
 
-  const sslRaw = (env.DATABASE_SSL ?? '').trim().toLowerCase();
-  const databaseSsl: Config['databaseSsl'] =
-    sslRaw === 'no-verify' ? 'no-verify' : bool(sslRaw, false) ? 'verify' : false;
-
   return {
     nodeEnv,
     isProduction,
     port: int(env.PORT, 8080, 'PORT'),
-    databaseUrl,
-    databaseSsl,
+    databasePath: env.DATABASE_PATH || path.resolve(here, '..', 'data', 'bread.sqlite'),
     jwtSecret,
     appTimezone,
     cookieSecure: bool(env.COOKIE_SECURE, isProduction),

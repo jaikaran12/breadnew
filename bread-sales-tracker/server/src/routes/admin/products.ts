@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { isUniqueViolation, many, one, withTransaction, type Pool } from '../../db.js';
+import { isUniqueViolation, nowIso, type Db } from '../../db.js';
 import { badRequest, conflict, notFound } from '../../errors.js';
+import { bumpCatalogStatement } from '../../services/settings.js';
 import { idParam, paiseSchema } from './helpers.js';
 
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Colour must look like #A1B2C3');
@@ -17,12 +18,11 @@ const productSchema = z.object({
 const PRODUCT_COLUMNS = `p.id, p.name, p.local_name AS "localName", p.price_paise AS "pricePaise", p.color,
   p.sort_order AS "sortOrder", p.is_active AS "isActive", p.created_at AS "createdAt", p.updated_at AS "updatedAt"`;
 
-export function productsRouter(pool: Pool): Router {
+export function productsRouter(db: Db): Router {
   const router = Router();
 
   router.get('/', async (_req, res) => {
-    const products = await many(
-      pool,
+    const products = await db.all(
       `SELECT ${PRODUCT_COLUMNS},
               (SELECT max(changed_at) FROM product_price_history h WHERE h.product_id = p.id) AS "priceChangedAt"
          FROM products p ORDER BY p.is_active DESC, p.sort_order, lower(p.name)`,
@@ -32,24 +32,25 @@ export function productsRouter(pool: Pool): Router {
 
   router.post('/', async (req, res) => {
     const body = productSchema.parse(req.body);
+    const now = nowIso();
+    const byName = '(SELECT id FROM products WHERE lower(name) = lower(?1))';
     try {
-      const product = await withTransaction(pool, async (c) => {
-        const created = await one<{ id: number }>(
-          c,
-          `INSERT INTO products (name, local_name, price_paise, color, is_active, sort_order)
-           VALUES ($1, $2, $3, coalesce($4, '#C68B59'), coalesce($5, true),
-                   (SELECT coalesce(max(sort_order), 0) + 1 FROM products))
-           RETURNING id`,
-          [body.name, body.localName || null, body.pricePaise, body.color ?? null, body.isActive ?? null],
-        );
-        await c.query(
-          `INSERT INTO product_price_history (product_id, old_price_paise, new_price_paise, changed_by_admin_id)
-           VALUES ($1, NULL, $2, $3)`,
-          [created!.id, body.pricePaise, req.admin!.id],
-        );
-        return one(c, `SELECT ${PRODUCT_COLUMNS} FROM products p WHERE p.id = $1`, [created!.id]);
-      });
-      res.status(201).json({ product });
+      const results = await db.batch([
+        {
+          sql: `INSERT INTO products (name, local_name, price_paise, color, is_active, sort_order, created_at, updated_at)
+                VALUES (?1, ?2, ?3, coalesce(?4, '#C68B59'), coalesce(?5, 1),
+                        (SELECT coalesce(max(sort_order), 0) + 1 FROM products), ?6, ?6)`,
+          params: [body.name, body.localName || null, body.pricePaise, body.color ?? null, body.isActive ?? null, now],
+        },
+        {
+          sql: `INSERT INTO product_price_history (product_id, old_price_paise, new_price_paise, changed_by_admin_id, changed_at)
+                VALUES (${byName}, NULL, ?2, ?3, ?4)`,
+          params: [body.name, body.pricePaise, req.admin!.id, now],
+        },
+        bumpCatalogStatement(),
+        { sql: `SELECT ${PRODUCT_COLUMNS} FROM products p WHERE p.id = ${byName}`, params: [body.name] },
+      ]);
+      res.status(201).json({ product: results[3].rows[0] });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A product with this name already exists');
       throw err;
@@ -59,24 +60,25 @@ export function productsRouter(pool: Pool): Router {
   router.put('/:id', async (req, res) => {
     const id = idParam(req.params.id);
     const body = productSchema.partial().parse(req.body);
+    const now = nowIso();
     try {
-      const product = await withTransaction(pool, async (c) => {
-        const current = await one<{ pricePaise: number }>(
-          c,
-          'SELECT price_paise AS "pricePaise" FROM products WHERE id = $1 FOR UPDATE',
-          [id],
-        );
-        if (!current) throw notFound('Product not found');
-        await c.query(
-          `UPDATE products SET
-              name = coalesce($2, name),
-              local_name = CASE WHEN $3::boolean THEN $4 ELSE local_name END,
-              price_paise = coalesce($5, price_paise),
-              color = coalesce($6, color),
-              is_active = coalesce($7, is_active),
-              updated_at = now()
-            WHERE id = $1`,
-          [
+      const results = await db.batch([
+        // Price history first, while the old price is still in the row (same transaction as the change).
+        {
+          sql: `INSERT INTO product_price_history (product_id, old_price_paise, new_price_paise, changed_by_admin_id, changed_at)
+                SELECT id, price_paise, ?2, ?3, ?4 FROM products WHERE id = ?1 AND ?2 IS NOT NULL AND price_paise <> ?2`,
+          params: [id, body.pricePaise ?? null, req.admin!.id, now],
+        },
+        {
+          sql: `UPDATE products SET
+                   name = coalesce(?2, name),
+                   local_name = CASE WHEN ?3 THEN ?4 ELSE local_name END,
+                   price_paise = coalesce(?5, price_paise),
+                   color = coalesce(?6, color),
+                   is_active = coalesce(?7, is_active),
+                   updated_at = ?8
+                 WHERE id = ?1`,
+          params: [
             id,
             body.name ?? null,
             body.localName !== undefined,
@@ -84,17 +86,14 @@ export function productsRouter(pool: Pool): Router {
             body.pricePaise ?? null,
             body.color ?? null,
             body.isActive ?? null,
+            now,
           ],
-        );
-        if (body.pricePaise !== undefined && body.pricePaise !== current.pricePaise) {
-          await c.query(
-            `INSERT INTO product_price_history (product_id, old_price_paise, new_price_paise, changed_by_admin_id)
-             VALUES ($1, $2, $3, $4)`,
-            [id, current.pricePaise, body.pricePaise, req.admin!.id],
-          );
-        }
-        return one(c, `SELECT ${PRODUCT_COLUMNS} FROM products p WHERE p.id = $1`, [id]);
-      });
+        },
+        bumpCatalogStatement(),
+        { sql: `SELECT ${PRODUCT_COLUMNS} FROM products p WHERE p.id = ?1`, params: [id] },
+      ]);
+      const product = results[3].rows[0];
+      if (!product) throw notFound('Product not found');
       res.json({ product });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A product with this name already exists');
@@ -106,22 +105,24 @@ export function productsRouter(pool: Pool): Router {
   router.post('/reorder', async (req, res) => {
     const { ids } = z.object({ ids: z.array(z.number().int().positive()).min(1).max(500) }).parse(req.body);
     if (new Set(ids).size !== ids.length) throw badRequest('Duplicate product ids');
-    await withTransaction(pool, async (c) => {
-      for (const [index, id] of ids.entries()) {
-        await c.query('UPDATE products SET sort_order = $2, updated_at = now() WHERE id = $1', [id, index + 1]);
-      }
-    });
+    await db.batch([
+      {
+        sql: `UPDATE products SET sort_order = (SELECT j.key + 1 FROM json_each(?1) j WHERE j.value = products.id), updated_at = ?2
+               WHERE id IN (SELECT value FROM json_each(?1))`,
+        params: [JSON.stringify(ids), nowIso()],
+      },
+      bumpCatalogStatement(),
+    ]);
     res.json({ ok: true });
   });
 
   router.get('/:id/price-history', async (req, res) => {
     const id = idParam(req.params.id);
-    const history = await many(
-      pool,
+    const history = await db.all(
       `SELECT h.id, h.old_price_paise AS "oldPricePaise", h.new_price_paise AS "newPricePaise",
               h.changed_at AS "changedAt", a.name AS "changedBy"
          FROM product_price_history h LEFT JOIN admins a ON a.id = h.changed_by_admin_id
-        WHERE h.product_id = $1 ORDER BY h.changed_at DESC, h.id DESC LIMIT 100`,
+        WHERE h.product_id = ?1 ORDER BY h.changed_at DESC, h.id DESC LIMIT 100`,
       [id],
     );
     res.json({ history });

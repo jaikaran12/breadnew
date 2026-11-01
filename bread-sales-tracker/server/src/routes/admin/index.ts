@@ -1,7 +1,6 @@
-import { Router } from 'express';
-import type { RateLimitRequestHandler } from 'express-rate-limit';
+import { Router, type RequestHandler } from 'express';
 import type { Config } from '../../config.js';
-import type { Pool } from '../../db.js';
+import type { Db } from '../../db.js';
 import { notFound } from '../../errors.js';
 import { requireAdmin, sameOriginOnly } from '../../auth.js';
 import { adminAccountRouter, adminPublicRouter } from './account.js';
@@ -14,24 +13,24 @@ import { salesRouter } from './sales.js';
 import { storesRouter } from './stores.js';
 import { tallyRouter } from './tally.js';
 
-export function adminRouter(config: Config, pool: Pool, loginLimiter: RateLimitRequestHandler): Router {
+export function adminRouter(config: Config, db: Db, loginLimiter: RequestHandler): Router {
   const router = Router();
   router.use(sameOriginOnly);
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'no-store');
     next();
   });
-  router.use(adminPublicRouter(config, pool, loginLimiter));
-  router.use(requireAdmin(config, pool));
-  router.use(adminAccountRouter(config, pool));
-  router.use('/dashboard', dashboardRouter(config, pool));
-  router.use('/sales', salesRouter(config, pool));
-  router.use('/reports', reportsRouter(config, pool));
-  router.use('/tally', tallyRouter(config, pool));
-  router.use('/areas', areasRouter(pool));
-  router.use('/stores', storesRouter(config, pool));
-  router.use('/products', productsRouter(pool));
-  router.use('/drivers', driversRouter(config, pool));
+  router.use(adminPublicRouter(config, db, loginLimiter));
+  router.use(requireAdmin(config, db));
+  router.use(adminAccountRouter(config, db));
+  router.use('/dashboard', dashboardRouter(config, db));
+  router.use('/sales', salesRouter(config, db));
+  router.use('/reports', reportsRouter(config, db));
+  router.use('/tally', tallyRouter(config, db));
+  router.use('/areas', areasRouter(db));
+  router.use('/stores', storesRouter(config, db));
+  router.use('/products', productsRouter(db));
+  router.use('/drivers', driversRouter(config, db));
   router.use((_req, _res) => {
     throw notFound();
   });

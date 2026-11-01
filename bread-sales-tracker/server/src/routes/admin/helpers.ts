@@ -1,16 +1,17 @@
 import { z } from 'zod';
+import { likePattern } from '../../db.js';
 import { notFound } from '../../errors.js';
 import { isValidDate } from '../../util/dates.js';
 
-/** Collects SQL conditions and their parameters ($1, $2, ...) for dynamic filters. */
+/** Collects SQL conditions and their parameters (?1, ?2, ...) for dynamic filters. */
 export class Where {
   readonly parts: string[] = [];
   readonly values: unknown[] = [];
 
-  /** Adds a value and returns its placeholder, e.g. "$3". */
+  /** Adds a value and returns its placeholder, e.g. "?3". */
   param(value: unknown): string {
     this.values.push(value);
-    return `$${this.values.length}`;
+    return `?${this.values.length}`;
   }
 
   /** add('s.driver_id = ?', 5) */
@@ -75,10 +76,9 @@ export function salesWhere(filter: SalesFilter, today: string, defaultStatus: 'c
   const status = filter.status ?? defaultStatus;
   if (status !== 'all') w.add('s.status = ?', status);
   if (filter.q) {
-    const term = `%${filter.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    const p = w.param(term);
+    const p = w.param(likePattern(filter.q));
     const idMatch = /^#?\d+$/.test(filter.q) ? ` OR s.id = ${w.param(Number(filter.q.replace('#', '')))}` : '';
-    w.raw(`(st.name ILIKE ${p} OR st.owner_name ILIKE ${p}${idMatch})`);
+    w.raw(`(st.name LIKE ${p} ESCAPE '\\' OR st.owner_name LIKE ${p} ESCAPE '\\'${idMatch})`);
   }
   return w;
 }

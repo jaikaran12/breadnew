@@ -31,8 +31,9 @@ export function configureApi(options: { baseUrl: string; token: string | null })
   token = options.token;
 }
 
-// 60 s: a server on a free hosting plan can take ~50 s to wake up after being idle.
-async function request<T>(method: string, path: string, body?: unknown, timeoutMs = 60000): Promise<T> {
+// 30 s: generous for a slow mobile connection; bills that time out stay on the phone and are sent again
+// (the server recognises a bill it already has, so it is never saved twice).
+async function request<T>(method: string, path: string, body?: unknown, timeoutMs = 30000): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const headers: Record<string, string> = { Accept: 'application/json' };

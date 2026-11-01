@@ -3,3 +3,8 @@ dist/
 .env
 public/
 coverage/
+data/
+site/
+.wrangler/
+.dev.vars
+wrangler.deploy.jsonc

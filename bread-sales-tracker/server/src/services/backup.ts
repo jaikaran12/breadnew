@@ -1,12 +1,8 @@
-import { once } from 'node:events';
-import type { Writable } from 'node:stream';
-import type pg from 'pg';
-import { latestMigration } from '../migrate.js';
-import type { Pool, Queryable } from '../db.js';
+import type { Db, Row, Statement } from '../db.js';
 
 /**
  * Tables in the order they must be restored (parents before children).
- * Every table is ordered by its first column (the primary key) when exported.
+ * Every table is exported ordered by its primary key.
  */
 export const BACKUP_TABLES = [
   'app_settings',
@@ -20,137 +16,144 @@ export const BACKUP_TABLES = [
   'sale_items',
   'settlements',
 ] as const;
+export type BackupTable = (typeof BACKUP_TABLES)[number];
 
 export const BACKUP_FORMAT = 'bread-sales-backup';
-const BATCH = 2000;
+/** Rows (ids) per request when the admin website downloads a backup (keeps each request small and fast). */
+export const BACKUP_PAGE_SIZE = 2000;
 
 export interface BackupFile {
   format: typeof BACKUP_FORMAT;
   version: 1;
   createdAt: string;
   migration: string | null;
-  tables: Record<string, Array<Record<string, unknown>>>;
+  tables: Record<string, Row[]>;
 }
 
-async function write(out: Writable, chunk: string): Promise<void> {
-  if (!out.write(chunk)) await once(out, 'drain');
+export function isBackupTable(name: string): name is BackupTable {
+  return (BACKUP_TABLES as readonly string[]).includes(name);
+}
+
+export async function latestMigration(db: Db): Promise<string | null> {
+  const row = await db
+    .first<{ name: string }>('SELECT name FROM d1_migrations ORDER BY name DESC LIMIT 1')
+    .catch(() => undefined);
+  return row?.name ?? null;
 }
 
 /**
- * Streams a complete copy of the database as JSON into `out` (usually a gzip stream).
- * Uses one read-only snapshot, so the copy is consistent even while drivers keep sending bills.
+ * What a backup will contain: the highest row id of every table, read in ONE statement so the set is
+ * consistent (a bill and its lines are saved together). Rows added later are left for the next backup.
+ * (Counting rows would read every row; the highest id is a single lookup.)
  */
-export async function writeBackup(pool: Pool, out: Writable): Promise<Record<string, number>> {
-  const counts: Record<string, number> = {};
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const header = {
-      format: BACKUP_FORMAT,
-      version: 1,
-      createdAt: new Date().toISOString(),
-      migration: await latestMigration(),
-    };
-    await write(out, `${JSON.stringify(header).slice(0, -1)},"tables":{`);
-    for (const [ti, table] of BACKUP_TABLES.entries()) {
-      await write(out, `${ti ? ',' : ''}${JSON.stringify(table)}:[`);
-      let offset = 0;
-      let first = true;
-      for (;;) {
-        const { rows } = await client.query(`SELECT * FROM ${table} ORDER BY 1 LIMIT ${BATCH} OFFSET ${offset}`);
-        if (rows.length === 0) break;
-        const text = rows.map((r) => JSON.stringify(r)).join(',');
-        await write(out, `${first ? '' : ','}${text}`);
-        first = false;
-        offset += rows.length;
-        if (rows.length < BATCH) break;
-      }
-      counts[table] = offset;
-      await write(out, ']');
-    }
-    await write(out, '}}\n');
-    await client.query('COMMIT');
-    return counts;
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-/** True when the database has no business data yet (only allowed target for a plain restore). */
-export async function isDatabaseEmpty(db: Queryable): Promise<boolean> {
-  const { rows } = await db.query<{ n: number }>(
-    `SELECT (SELECT count(*) FROM areas) + (SELECT count(*) FROM stores) + (SELECT count(*) FROM products)
-          + (SELECT count(*) FROM drivers) + (SELECT count(*) FROM sales) AS n`,
+export async function backupInfo(db: Db) {
+  const tables = BACKUP_TABLES.filter((t) => t !== 'app_settings');
+  const row = await db.first<Record<string, number | null>>(
+    `SELECT ${tables.map((t) => `(SELECT max(id) FROM ${t}) AS "${t}"`).join(', ')}`,
   );
-  return Number(rows[0]?.n ?? 0) === 0;
+  const lastIds: Record<string, number> = {};
+  for (const t of tables) lastIds[t] = Number(row?.[t] ?? 0);
+  return {
+    format: BACKUP_FORMAT,
+    version: 1 as const,
+    createdAt: new Date().toISOString(),
+    migration: await latestMigration(db),
+    tables: [...BACKUP_TABLES],
+    lastIds,
+    pageSize: BACKUP_PAGE_SIZE,
+  };
 }
 
 /**
- * Loads a backup into the database (schema must already be migrated).
- * With `replace`, all existing data is removed first. Runs in one transaction: all or nothing.
+ * Raw rows of a table, exactly as stored (0/1 booleans, ISO text timestamps), with after < id <= upto
+ * (app_settings: all rows). Ranges of ids instead of OFFSET, so every row is read only once.
  */
-export async function restoreBackup(
-  pool: Pool,
-  backup: BackupFile,
-  options: { replace: boolean },
-): Promise<Record<string, number>> {
+export async function backupPage(db: Db, table: BackupTable, after = 0, upto = after + BACKUP_PAGE_SIZE): Promise<Row[]> {
+  if (table === 'app_settings') return db.all('SELECT * FROM app_settings ORDER BY key');
+  return db.all(`SELECT * FROM ${table} WHERE id > ?1 AND id <= ?2 ORDER BY id`, [after, upto]);
+}
+
+/** Builds a complete backup in memory (used by scripts and tests; the website downloads it piece by piece). */
+export async function buildBackup(db: Db): Promise<BackupFile> {
+  const info = await backupInfo(db);
+  const tables: Record<string, Row[]> = { app_settings: await backupPage(db, 'app_settings') };
+  for (const table of BACKUP_TABLES) {
+    if (table === 'app_settings') continue;
+    tables[table] = [];
+    for (let after = 0; after < info.lastIds[table]; after += BACKUP_PAGE_SIZE) {
+      tables[table].push(...(await backupPage(db, table, after, Math.min(after + BACKUP_PAGE_SIZE, info.lastIds[table]))));
+    }
+  }
+  return { format: BACKUP_FORMAT, version: 1, createdAt: info.createdAt, migration: info.migration, tables };
+}
+
+function checkBackup(backup: BackupFile, latest: string | null) {
   if (backup?.format !== BACKUP_FORMAT || typeof backup.tables !== 'object') {
     throw new Error('This file is not a Bread Sales backup');
   }
-  const latest = await latestMigration();
   if (backup.migration && latest && backup.migration > latest) {
     throw new Error(`The backup was made by a newer version of the app (${backup.migration}). Update the app first.`);
   }
-  const client = await pool.connect();
-  const counts: Record<string, number> = {};
-  try {
-    await client.query('BEGIN');
-    if (options.replace) {
-      await client.query(`TRUNCATE ${[...BACKUP_TABLES].reverse().join(', ')} RESTART IDENTITY CASCADE`);
-    } else if (!(await isDatabaseEmpty(client))) {
-      throw new Error('The database already has data. Use the "replace" option to overwrite it.');
-    } else {
-      // A fresh server creates the first admin by itself; the backup brings its own admins.
-      await client.query('TRUNCATE app_settings, admins RESTART IDENTITY CASCADE');
-    }
-    for (const table of BACKUP_TABLES) {
-      const rows = backup.tables[table] ?? [];
-      counts[table] = rows.length;
-      if (rows.length === 0) continue;
-      const columns = await tableColumns(client, table);
-      // Only columns present in the backup: newer columns keep their default values.
-      const present = columns.filter((c) => Object.prototype.hasOwnProperty.call(rows[0], c));
-      const list = present.map((c) => `"${c}"`).join(', ');
-      for (let i = 0; i < rows.length; i += 1000) {
-        await client.query(
-          `INSERT INTO ${table} (${list}) SELECT ${list} FROM json_populate_recordset(NULL::${table}, $1::json)`,
-          [JSON.stringify(rows.slice(i, i + 1000))],
-        );
-      }
-      if (columns.includes('id')) {
-        await client.query(
-          `SELECT setval(pg_get_serial_sequence('${table}', 'id'), coalesce((SELECT max(id) FROM ${table}), 1), (SELECT max(id) FROM ${table}) IS NOT NULL)`,
-        );
-      }
-    }
-    await client.query('COMMIT');
-    return counts;
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw err;
-  } finally {
-    client.release();
-  }
 }
 
-async function tableColumns(client: pg.PoolClient, table: string): Promise<string[]> {
-  const { rows } = await client.query<{ column_name: string }>(
-    `SELECT column_name FROM information_schema.columns
-      WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position`,
-    [table],
+/** INSERT statements for every row of the backup (in restore order). */
+export function insertStatements(backup: BackupFile): Statement[] {
+  const statements: Statement[] = [];
+  for (const table of BACKUP_TABLES) {
+    for (const row of backup.tables[table] ?? []) {
+      const columns = Object.keys(row);
+      statements.push({
+        sql: `INSERT INTO ${table} (${columns.map((c) => `"${c}"`).join(', ')}) VALUES (${columns
+          .map((_, i) => `?${i + 1}`)
+          .join(', ')})`,
+        params: columns.map((c) => row[c]),
+      });
+    }
+  }
+  return statements;
+}
+
+function sqlLiteral(value: unknown): string {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
+  if (typeof value === 'boolean') return value ? '1' : '0';
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+/** The whole backup as one SQL script (for `wrangler d1 execute --file` on Cloudflare). */
+export function backupToSql(backup: BackupFile, options: { replace: boolean }): string {
+  checkBackup(backup, null);
+  const lines: string[] = ['PRAGMA defer_foreign_keys = true;'];
+  if (options.replace) for (const table of [...BACKUP_TABLES].reverse()) lines.push(`DELETE FROM ${table};`);
+  for (const s of insertStatements(backup)) {
+    let i = 0;
+    lines.push(`${s.sql.replace(/\?\d+/g, () => sqlLiteral(s.params![i++]))};`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** True when the database has no business data yet (only allowed target for a plain restore). */
+export async function isDatabaseEmpty(db: Db): Promise<boolean> {
+  const row = await db.first<{ n: number }>(
+    `SELECT EXISTS (SELECT 1 FROM areas) + EXISTS (SELECT 1 FROM stores) + EXISTS (SELECT 1 FROM products)
+          + EXISTS (SELECT 1 FROM drivers) + EXISTS (SELECT 1 FROM sales) AS n`,
   );
-  return rows.map((r) => r.column_name);
+  return Number(row?.n ?? 0) === 0;
+}
+
+/**
+ * Loads a backup into the database (schema must already exist). With `replace`, all existing data is
+ * removed first. Runs as one transaction: all or nothing.
+ */
+export async function restoreBackup(db: Db, backup: BackupFile, options: { replace: boolean }): Promise<Record<string, number>> {
+  checkBackup(backup, await latestMigration(db));
+  if (!options.replace && !(await isDatabaseEmpty(db))) {
+    throw new Error('The database already has data. Use the "replace" option to overwrite it.');
+  }
+  // A fresh server creates the first admin by itself; the backup brings its own admins and settings.
+  const wipe: Statement[] = [...BACKUP_TABLES].reverse().map((t) => ({ sql: `DELETE FROM ${t}` }));
+  const counts: Record<string, number> = {};
+  for (const table of BACKUP_TABLES) counts[table] = backup.tables[table]?.length ?? 0;
+  await db.batch([...wipe, ...insertStatements(backup)]);
+  return counts;
 }

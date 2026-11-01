@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { Config } from '../../config.js';
-import { isUniqueViolation, many, one, type Pool } from '../../db.js';
+import { isUniqueViolation, nowIso, type Db } from '../../db.js';
 import { conflict, notFound } from '../../errors.js';
 import { hashSecret } from '../../auth.js';
 import { todayInZone } from '../../util/dates.js';
@@ -35,27 +35,30 @@ const updateSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-const DRIVER_COLUMNS = `d.id, d.name, d.phone, d.vehicle_number AS "vehicleNumber", d.is_active AS "isActive",
-  d.last_login_at AS "lastLoginAt", d.last_seen_at AS "lastSeenAt", d.created_at AS "createdAt",
-  (d.locked_until IS NOT NULL AND d.locked_until > now()) AS "isLocked"`;
+/** Driver columns; `nowParam` is the placeholder holding the current time (for "locked"). */
+const driverColumns = (nowParam: string) => `d.id, d.name, d.phone, d.vehicle_number AS "vehicleNumber",
+  d.is_active AS "isActive", d.last_login_at AS "lastLoginAt", d.last_seen_at AS "lastSeenAt", d.created_at AS "createdAt",
+  (d.locked_until IS NOT NULL AND d.locked_until > ${nowParam}) AS "isLocked"`;
 
-export function driversRouter(config: Config, pool: Pool): Router {
+export function driversRouter(config: Config, db: Db): Router {
   const router = Router();
+
+  const getDriver = (id: number) =>
+    db.first(`SELECT ${driverColumns('?2')} FROM drivers d WHERE d.id = ?1`, [id, nowIso()]);
 
   router.get('/', async (_req, res) => {
     const today = todayInZone(config.appTimezone);
-    const drivers = await many(
-      pool,
-      `SELECT ${DRIVER_COLUMNS},
+    const drivers = await db.all(
+      `SELECT ${driverColumns('?2')},
               coalesce(t.bills, 0) AS "todayBills", coalesce(t.amount, 0) AS "todayAmountPaise",
               t.last_sale_at AS "lastSaleAt"
          FROM drivers d
          LEFT JOIN (
-           SELECT driver_id, count(*)::int AS bills, sum(total_paise) AS amount, max(sold_at) AS last_sale_at
-             FROM sales WHERE sale_date = $1 AND status = 'completed' GROUP BY driver_id
+           SELECT driver_id, count(*) AS bills, sum(total_paise) AS amount, max(sold_at) AS last_sale_at
+             FROM sales WHERE sale_date = ?1 AND status = 'completed' GROUP BY driver_id
          ) t ON t.driver_id = d.id
         ORDER BY d.is_active DESC, lower(d.name)`,
-      [today],
+      [today, nowIso()],
     );
     res.json({ drivers, today });
   });
@@ -63,13 +66,11 @@ export function driversRouter(config: Config, pool: Pool): Router {
   router.post('/', async (req, res) => {
     const body = createSchema.parse(req.body);
     try {
-      const created = await one<{ id: number }>(
-        pool,
-        `INSERT INTO drivers (name, phone, pin_hash, vehicle_number) VALUES ($1, $2, $3, $4) RETURNING id`,
+      const created = await db.first<{ id: number }>(
+        `INSERT INTO drivers (name, phone, pin_hash, vehicle_number) VALUES (?1, ?2, ?3, ?4) RETURNING id`,
         [body.name, body.phone, await hashSecret(body.pin), body.vehicleNumber || null],
       );
-      const driver = await one(pool, `SELECT ${DRIVER_COLUMNS} FROM drivers d WHERE d.id = $1`, [created!.id]);
-      res.status(201).json({ driver });
+      res.status(201).json({ driver: await getDriver(created!.id) });
     } catch (err) {
       if (isUniqueViolation(err)) throw conflict('A driver with this phone number already exists');
       throw err;
@@ -80,17 +81,16 @@ export function driversRouter(config: Config, pool: Pool): Router {
     const id = idParam(req.params.id);
     const body = updateSchema.parse(req.body);
     try {
-      const updated = await one<{ id: number }>(
-        pool,
+      const updated = await db.first<{ id: number }>(
         `UPDATE drivers SET
-            name = coalesce($2, name),
-            phone = coalesce($3, phone),
-            vehicle_number = CASE WHEN $4::boolean THEN $5 ELSE vehicle_number END,
-            is_active = coalesce($6, is_active),
+            name = coalesce(?2, name),
+            phone = coalesce(?3, phone),
+            vehicle_number = CASE WHEN ?4 THEN ?5 ELSE vehicle_number END,
+            is_active = coalesce(?6, is_active),
             -- Turning a driver off logs their phone out immediately.
-            token_version = CASE WHEN $6::boolean IS FALSE AND is_active THEN token_version + 1 ELSE token_version END,
-            updated_at = now()
-          WHERE id = $1 RETURNING id`,
+            token_version = CASE WHEN ?6 = 0 AND is_active = 1 THEN token_version + 1 ELSE token_version END,
+            updated_at = ?7
+          WHERE id = ?1 RETURNING id`,
         [
           id,
           body.name ?? null,
@@ -98,6 +98,7 @@ export function driversRouter(config: Config, pool: Pool): Router {
           body.vehicleNumber !== undefined,
           body.vehicleNumber || null,
           body.isActive ?? null,
+          nowIso(),
         ],
       );
       if (!updated) throw notFound('Driver not found');
@@ -105,20 +106,18 @@ export function driversRouter(config: Config, pool: Pool): Router {
       if (isUniqueViolation(err)) throw conflict('A driver with this phone number already exists');
       throw err;
     }
-    const driver = await one(pool, `SELECT ${DRIVER_COLUMNS} FROM drivers d WHERE d.id = $1`, [id]);
-    res.json({ driver });
+    res.json({ driver: await getDriver(id) });
   });
 
   /** Sets a new PIN. The driver's phone is logged out and must log in with the new PIN. */
   router.post('/:id/pin', async (req, res) => {
     const id = idParam(req.params.id);
     const { pin } = z.object({ pin: pinSchema }).parse(req.body);
-    const updated = await one(
-      pool,
-      `UPDATE drivers SET pin_hash = $2, token_version = token_version + 1, failed_login_attempts = 0,
-              locked_until = NULL, updated_at = now()
-        WHERE id = $1 RETURNING id`,
-      [id, await hashSecret(pin)],
+    const updated = await db.first(
+      `UPDATE drivers SET pin_hash = ?2, token_version = token_version + 1, failed_login_attempts = 0,
+              locked_until = NULL, updated_at = ?3
+        WHERE id = ?1 RETURNING id`,
+      [id, await hashSecret(pin), nowIso()],
     );
     if (!updated) throw notFound('Driver not found');
     res.json({ ok: true });
@@ -127,9 +126,8 @@ export function driversRouter(config: Config, pool: Pool): Router {
   /** Clears a lock after too many wrong PINs. */
   router.post('/:id/unlock', async (req, res) => {
     const id = idParam(req.params.id);
-    const updated = await one(
-      pool,
-      'UPDATE drivers SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1 RETURNING id',
+    const updated = await db.first(
+      'UPDATE drivers SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?1 RETURNING id',
       [id],
     );
     if (!updated) throw notFound('Driver not found');
@@ -139,11 +137,7 @@ export function driversRouter(config: Config, pool: Pool): Router {
   /** Logs the driver out of every phone (e.g. lost phone) without changing the PIN. */
   router.post('/:id/logout', async (req, res) => {
     const id = idParam(req.params.id);
-    const updated = await one(
-      pool,
-      'UPDATE drivers SET token_version = token_version + 1 WHERE id = $1 RETURNING id',
-      [id],
-    );
+    const updated = await db.first('UPDATE drivers SET token_version = token_version + 1 WHERE id = ?1 RETURNING id', [id]);
     if (!updated) throw notFound('Driver not found');
     res.json({ ok: true });
   });

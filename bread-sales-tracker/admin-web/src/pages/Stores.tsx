@@ -1,9 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, downloadUrl } from '../api';
-import { Badge, Card, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Pager, Toggle, toast } from '../components/ui';
-import { ago, num, rupees } from '../format';
+import { api } from '../api';
+import { Badge, Card, DownloadButton, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Pager, Toggle, toast } from '../components/ui';
+import { paiseText, saveCsv } from '../exporting';
+import { ago, getTimeZone, num, rupees, todayIn } from '../format';
 import { useAreas } from '../lookups';
 import type { Store } from '../types';
 
@@ -12,6 +13,32 @@ interface StoreList {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** Every shop (active and removed) as a CSV file for Excel. */
+async function downloadShopList(progress: (done: number, total: number) => void) {
+  const stores: Store[] = [];
+  for (let page = 1; ; page++) {
+    const res = await api.get<StoreList>('/stores', { status: 'all', sort: 'area', page, pageSize: 1000 });
+    stores.push(...res.stores);
+    progress(stores.length, res.total);
+    if (stores.length >= res.total || res.stores.length === 0) break;
+  }
+  saveCsv(
+    `shops-${todayIn()}.csv`,
+    ['Area', 'Shop name', 'Owner', 'Phone', 'Address', 'Notes', 'Active', 'Last bill', 'Sales last 30 days (Rs)'],
+    stores.map((r) => [
+      r.areaName,
+      r.name,
+      r.ownerName,
+      r.phone,
+      r.address,
+      r.notes,
+      r.isActive ? 'yes' : 'no',
+      r.lastSaleAt ? new Date(r.lastSaleAt).toLocaleString('en-IN', { timeZone: getTimeZone() }) : '',
+      paiseText(r.amount30Paise ?? 0),
+    ]),
+  );
 }
 
 export function StoresPage() {
@@ -46,9 +73,7 @@ export function StoresPage() {
             <button className="btn btn-light" onClick={() => setImporting(true)}>
               Import from Excel / CSV
             </button>
-            <a className="btn btn-light" href={downloadUrl('/stores/export.csv')}>
-              Download list
-            </a>
+            <DownloadButton label="Download list" run={downloadShopList} />
             <button className="btn btn-primary" onClick={() => setEditing('new')} disabled={!areas.data?.length}>
               + Add shop
             </button>

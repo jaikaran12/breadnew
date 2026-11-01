@@ -1,0 +1,4 @@
+# Secrets for `npm run cf:dev` (Cloudflare's local runtime). Copy to .dev.vars
+JWT_SECRET=local-test-secret-local-test-secret-1234
+ADMIN_PASSWORD=change-me-123
+COOKIE_SECURE=false

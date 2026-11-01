@@ -1,5 +1,5 @@
 /**
- * Minimal CSV/TSV support for importing shop lists and exporting reports.
+ * Minimal CSV/TSV reader for importing shop lists (CSV downloads are made by the admin website itself).
  * Handles quoted fields, escaped quotes ("") and CRLF line endings. The delimiter is
  * detected from the header line so text pasted straight from Excel (tab separated) works too.
  */
@@ -56,19 +56,4 @@ export function parseCsv(input: string, delimiter = detectDelimiter(input)): str
   }
   // Drop completely empty lines
   return rows.filter((r) => r.some((c) => c.trim() !== ''));
-}
-
-function escapeCell(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  let s = String(value);
-  // Stop spreadsheet apps from treating user text as a formula.
-  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
-  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-/** Builds a CSV document. Starts with a BOM so Excel shows Hindi and ₹ correctly. */
-export function toCsv(header: string[], rows: unknown[][]): string {
-  const lines = [header, ...rows].map((r) => r.map(escapeCell).join(','));
-  return `﻿${lines.join('\r\n')}\r\n`;
 }

@@ -16,7 +16,6 @@ interface Dashboard {
   byDriver: Array<Summary & { driverId: number; name: string; storesVisited: number; lastSaleAt: string | null }>;
   byArea: Array<{ areaId: number; name: string; bills: number; totalPaise: number; storesVisited: number; totalStores: number }>;
   byProduct: Array<{ productId: number; name: string; color: string; quantity: number; totalPaise: number }>;
-  trend: Array<{ date: string; bills: number; totalPaise: number }>;
   recent: Array<{
     id: number;
     soldAt: string;
@@ -40,7 +39,13 @@ export function DashboardPage() {
   const q = useQuery({
     queryKey: ['dashboard', date],
     queryFn: () => api.get<Dashboard>('/dashboard', { date }),
-    refetchInterval: isToday && !idle ? 15_000 : false,
+    refetchInterval: isToday && !idle ? 60_000 : false,
+  });
+  // The 14-day chart changes slowly: ask for it less often (keeps the free database well within its limits).
+  const trend = useQuery({
+    queryKey: ['dashboard-trend', date],
+    queryFn: () => api.get<{ trend: Array<{ date: string; bills: number; totalPaise: number }> }>('/dashboard/trend', { date }),
+    refetchInterval: isToday && !idle ? 10 * 60_000 : false,
   });
   const d = q.data;
   const backupAgeDays = me?.lastBackupAt ? (Date.now() - Date.parse(me.lastBackupAt)) / 86_400_000 : null;
@@ -54,7 +59,7 @@ export function DashboardPage() {
             'Live updates paused while nobody is using the page — move the mouse or tap to resume'
           ) : isToday ? (
             <span className="live">
-              <span className="live-dot" /> Live — updates every 15 seconds
+              <span className="live-dot" /> Live — updates every minute
               {q.dataUpdatedAt ? ` · last update ${time(new Date(q.dataUpdatedAt).toISOString())}` : ''}
             </span>
           ) : (
@@ -130,17 +135,24 @@ export function DashboardPage() {
               )}
             </Card>
             <Card title="Last 14 days">
-              <BarChart
-                highlightLast
-                data={d.trend.map((t) => ({
-                  label: shortDate(t.date),
-                  value: t.totalPaise,
-                  title: `${shortDate(t.date)}: ${rupees(t.totalPaise)} (${t.bills} bills)`,
-                }))}
-              />
-              <div className="muted small center">
-                14-day total {rupees(d.trend.reduce((a, t) => a + t.totalPaise, 0))} · {num(d.trend.reduce((a, t) => a + t.bills, 0))} bills
-              </div>
+              {!trend.data ? (
+                <Loading />
+              ) : (
+                <>
+                  <BarChart
+                    highlightLast
+                    data={trend.data.trend.map((t) => ({
+                      label: shortDate(t.date),
+                      value: t.totalPaise,
+                      title: `${shortDate(t.date)}: ${rupees(t.totalPaise)} (${t.bills} bills)`,
+                    }))}
+                  />
+                  <div className="muted small center">
+                    14-day total {rupees(trend.data.trend.reduce((a, t) => a + t.totalPaise, 0))} ·{' '}
+                    {num(trend.data.trend.reduce((a, t) => a + t.bills, 0))} bills
+                  </div>
+                </>
+              )}
             </Card>
           </div>
 

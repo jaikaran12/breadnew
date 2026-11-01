@@ -3,7 +3,11 @@
 **/.env
 **/.env.*
 !**/.env.example
+**/.dev.vars
 server/public
+server/site
+server/data
+server/.wrangler
+server/wrangler.deploy.jsonc
 android-wrapper
-backups
 *.md

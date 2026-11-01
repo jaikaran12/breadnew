@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { api, downloadUrl } from '../api';
-import { Card, Empty, ErrorBox, InlineBar, Loading, PageHeader, RangePicker, Stat } from '../components/ui';
+import { api } from '../api';
+import { Card, DownloadButton, Empty, ErrorBox, InlineBar, Loading, PageHeader, RangePicker, Stat } from '../components/ui';
+import { paiseText, saveCsv } from '../exporting';
 import { addDays, dateLabel, dateTime, num, rupees, todayIn } from '../format';
 import { useAreas, useDrivers } from '../lookups';
 import type { Summary } from '../types';
@@ -56,9 +57,28 @@ export function ReportsPage() {
         title="Reports"
         subtitle="Sales grouped by product, shop, area, driver or day. Cancelled bills are not counted."
         actions={
-          <a className="btn btn-light" href={downloadUrl('/reports', { ...query, format: 'csv' })}>
-            Download CSV (Excel)
-          </a>
+          <DownloadButton
+            label="Download CSV (Excel)"
+            run={async () => {
+              // Same numbers as on screen (fetched again so the file matches the chosen filters exactly).
+              const data = await api.get<{ rows: Row[] }>('/reports', query);
+              const second = { product: 'Local name', store: 'Area', area: '', driver: 'Phone', day: 'Day' }[groupBy];
+              saveCsv(
+                `report-${groupBy}-${range.from}-to-${range.to}.csv`,
+                [nameHeader, ...(second ? [second] : []), 'Bills', 'Units', 'Amount (Rs)', 'Cash (Rs)', 'UPI (Rs)', 'Udhaar (Rs)'],
+                data.rows.map((r) => [
+                  r.label,
+                  ...(second ? [r.sublabel ?? ''] : []),
+                  r.bills,
+                  r.quantity,
+                  paiseText(r.amountPaise),
+                  paiseText(r.cashPaise),
+                  paiseText(r.upiPaise),
+                  paiseText(r.creditPaise),
+                ]),
+              );
+            }}
+          />
         }
       />
       <Card>

@@ -46,7 +46,7 @@ All money is calculated in whole paise, and the server checks every bill total a
 
 | Page | Use it for |
 | --- | --- |
-| **Dashboard** | Today's sales, live (refreshes every 15 seconds): total, bills, shops visited, cash / UPI / udhaar, per driver, per area, products sold, last 14 days, latest bills |
+| **Dashboard** | Today's sales, live (refreshes every minute): total, bills, shops visited, cash / UPI / udhaar, per driver, per area, products sold, last 14 days, latest bills |
 | **Sales (bills)** | Every bill with filters (dates, driver, area, payment, cancelled, shop name or bill number). Open a bill to see the items; cancel a wrong bill (with a reason) or restore it. Download as CSV (opens in Excel) |
 | **Cash tally** | At the end of the day: for each driver, **cash expected** (cash bills only), UPI and udhaar. Type the cash handed over and the page shows **Short ₹… / Extra ₹… / Matches**. If a late bill arrives after you tallied, the page warns you. After you tally a day, the driver can no longer cancel bills from that day on the phone |
 | **Reports** | Any date range, grouped by product, shop, area, driver or day, with CSV download |
@@ -67,85 +67,96 @@ The website also works on a phone.
  that opens the driver web app in Chrome              │
         │  HTTPS, works offline + sync                │
         ▼                                             ▼
- ┌─────────────────────────── server ────────────────────────────┐
- │  Driver web app (/driver/)        Admin website (/)           │
- │  Node.js API  (/api/driver/*, /api/admin/*)                   │
- └───────────────────────────────┬───────────────────────────────┘
-                                 ▼
-                           PostgreSQL database
+ ┌──────────────────────── Cloudflare (free) ────────────────────────┐
+ │  Driver web app (/driver/)        Admin website (/)               │
+ │  API (/api/driver/*, /api/admin/*) — a Cloudflare Worker          │
+ └─────────────────────────────────┬─────────────────────────────────┘
+                                   ▼
+                     D1 database (SQLite, run by Cloudflare)
 ```
 
 | Folder | What is in it |
 | --- | --- |
-| `server/` | API server (Node.js 22, Express, PostgreSQL). Database tables in `server/migrations/`. Tests in `server/test/` |
+| `server/` | API (Node.js / Express). Runs on Cloudflare Workers with a D1 database, or on any computer with Node.js 22 and a SQLite file. Database tables in `server/migrations/`, tests in `server/test/`, Cloudflare settings in `server/wrangler.jsonc` and `server/cloudflare/` |
 | `admin-web/` | Owner website (React) |
 | `driver-app/` | Driver web app (React, works offline), served at `/driver/` |
 | `android-wrapper/` | The Android app: a small wrapper (Trusted Web Activity) that opens the driver web app full screen in Chrome |
-| `Dockerfile`, `docker-compose.yml`, `Caddyfile`, `deploy/` | Production setup: one container with everything, PostgreSQL, automatic HTTPS, daily backups |
-| `../render.yaml` | One-click setup on Render.com. Render only reads it from the top of the repository |
-| `../.github/workflows/bread-sales.yml` | GitHub Actions: tests, and **builds the Android APK** for you. GitHub only reads workflows from the top-level `.github` folder |
-| `../.github/workflows/bread-sales-live-check.yml` | “Run workflow” with your server address to check that the live server answers correctly |
+| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | Optional: run everything on your own server instead of Cloudflare |
+| `../.github/workflows/bread-sales.yml` | GitHub Actions: tests, **puts the website online on Cloudflare** and **builds the Android app**. GitHub only reads workflows from the top-level `.github` folder |
+| `../.github/workflows/bread-sales-live-check.yml` | “Run workflow” with your website address to check that the live site answers correctly |
 
 ---
 
-## 1. Put the server online
+## 1. Put it online (free: Cloudflare + GitHub)
 
-You need the server online before giving the app to drivers. **A** costs nothing and suits a business with
-low usage; **B** is for later if you want no waiting at all and full control.
+Everything runs on free plans, with no credit card and no server to look after:
 
-### A. Free hosting: Render + Neon (₹0 per month, no credit card)
+* **Cloudflare** runs the website, the API for the app and the database. It does not sleep, so pages and
+  bills are fast at any time of day.
+* **GitHub** tests every change, puts it online on Cloudflare, and builds the Android app (Releases).
 
-* **Neon** keeps the database (free, does not expire).
-* **Render** runs the website and the API for the app (free).
-* **GitHub Releases** hosts the Android app for drivers to download (free).
+**Step 1 — Cloudflare account (2 minutes).** Sign up at **https://dash.cloudflare.com/sign-up** (free plan,
+no card needed) and confirm your email.
 
-**Step 1 — database (Neon, 3 minutes)**
-1. Go to **https://neon.com** → *Sign up* → *Continue with GitHub*.
-2. Create a project: name `bread-sales`, Postgres version **17**, region **AWS Asia Pacific (Singapore)**.
-3. Click **Connect** and copy the **connection string**. It looks like
-   `postgresql://neondb_owner:…@ep-….ap-southeast-1.aws.neon.tech/neondb?sslmode=require…`.
-   Keep it private: anyone with it can read your data.
+**Step 2 — a key that lets GitHub update your site (3 minutes).**
+1. In Cloudflare: click the person icon (top right) → **My Profile** → **API Tokens** → **Create Token**.
+2. Next to **Edit Cloudflare Workers** click **Use template**.
+3. Under *Permissions* click **+ Add more** and choose **Account** → **D1** → **Edit**.
+4. *Account Resources*: your account. *Zone Resources*: **All zones**. → **Continue to summary** →
+   **Create Token** → **Copy** the token (it is shown only once). Keep it private.
 
-**Step 2 — website (Render, 10 minutes)**
-1. Open **https://render.com/deploy?repo=https://github.com/jaikaran12/breadnew** → *Sign in with GitHub*.
-2. Fill in:
-   * `DATABASE_URL` — the Neon connection string from step 1
-   * `ADMIN_PASSWORD` — your password for the website (at least 8 characters)
-   * `BUSINESS_NAME` — e.g. *Sunrise Bakery*
+**Step 3 — four secrets in GitHub (3 minutes).** In the repository on GitHub: **Settings → Secrets and
+variables → Actions → New repository secret**, and add:
 
-   and click **Deploy Blueprint** / **Apply**.
-3. The first build takes 5–10 minutes. Then open the web service — the address looks like
-   `https://breadnew-sales.onrender.com` — and log in with username `owner` and your password.
+| Name | Value |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | the token from step 2 |
+| `ADMIN_PASSWORD` | the password you will use for the owner website (at least 8 characters) |
+| `ANDROID_KEYSTORE_BASE64` | the long text from the signing key file (see section 3) |
+| `ANDROID_KEYSTORE_PASSWORD` | the password of the signing key |
 
-**What “free” means here**
-* The website **sleeps after 15 minutes without visits**; the next visit takes about a minute to wake it.
-  Drivers are not held up: bills are saved on the phone immediately and sent as soon as the server answers.
-* Neon free: about 0.5–1 GB of storage (years of bills for a small business) and 100 compute-hours a month.
-  The dashboard pauses its live refresh when nobody is using it, so the database can sleep at night.
-* Neon free keeps only a few hours of history, so **download a backup every week** (Settings → *Backup*;
-  the dashboard reminds you). See *Backups* below.
-* If you ever want no waiting, upgrade the Render web service to *Starter* (~$7/month); nothing else changes.
+**Step 4 — run it.** **Actions → Bread Sales → Run workflow → Run workflow.** After 5–10 minutes the run
+shows a green tick and a summary with your links:
 
-Every push to GitHub that changes `bread-sales-tracker/` redeploys the website automatically.
+* Owner website: `https://bread-sales.<your-name>.workers.dev` — log in with username **`owner`** and your
+  `ADMIN_PASSWORD` (change it later under Settings).
+* Android app for drivers: `https://github.com/<you>/<repo>/releases/latest/download/bread-sales.apk`
+
+The first run also creates the database. A brand-new `workers.dev` address can take a few minutes before it
+opens. If the run fails, open it and read the red error line: it says what is missing.
+
+**Updates:** every change pushed to the main branch is tested and put online automatically. Use **Run
+workflow** to also publish a new Android app (rarely needed: the app shows the website, so it updates itself).
+
+**What “free” means here.** Cloudflare's free plan has daily limits (requests to the API, and rows the
+database reads and writes per day) that are far above what a bakery with ~20 drivers and ~500 shops uses.
+The owner website refreshes once a minute and pauses when nobody is using it, to stay well inside them.
+If a limit were ever reached, the drivers' phones keep their bills and send them after the daily reset
+(05:30 India time) — nothing is lost.
 
 ### Backups
 
-* **Download:** admin website → **Settings → Download backup now**. Keep the file (`bread-sales-backup-….json.gz`)
-  in Google Drive or similar. It contains all your business data — keep it private.
-* **Restore** (into a new, empty database — for example a new Neon project), on any computer with Node.js 22:
+* **Download:** owner website → **Settings → Download backup now**. Keep the file
+  (`bread-sales-backup-….json.gz`) in Google Drive or similar, **at least once a week** (the dashboard
+  reminds you). It contains all your business data — keep it private.
+* **Undo a recent mistake:** Cloudflare also keeps the database's history for recent days (“Time Travel”).
+  On a computer with Node.js 22, in `bread-sales-tracker/server` (after `npm install`, with
+  `CLOUDFLARE_API_TOKEN` set): `npx wrangler d1 time-travel info bread-sales` shows it, and
+  `npx wrangler d1 time-travel restore bread-sales --timestamp=2026-01-31T08:00:00+05:30` goes back to that time.
+* **Restore a downloaded backup into Cloudflare** (replaces everything in the online database):
   ```bash
   cd bread-sales-tracker/server
   npm install
-  DATABASE_URL="postgresql://…new database…" npm run restore -- ~/Downloads/bread-sales-backup-2026-01-31_0800.json.gz
+  npm run restore -- ~/Downloads/bread-sales-backup-2026-01-31_0800.json.gz --replace --sql restore.sql
+  CLOUDFLARE_API_TOKEN=… npx wrangler d1 execute bread-sales --remote --file restore.sql
   ```
-  Then point `DATABASE_URL` on Render to the new database. Add `--replace` to overwrite a database that already
-  has data. On your own server (option B):
-  `docker compose cp backup.json.gz app:/tmp/b.json.gz && docker compose exec app node dist/scripts/restore-backup.js /tmp/b.json.gz --replace`
+* On your own server (option B): `npm run restore -- <file> --replace` with `DATABASE_PATH` pointing to the
+  database file (in Docker: `docker compose exec app node dist/scripts/restore-backup.js /tmp/b.json.gz --replace`
+  after `docker compose cp <file> app:/tmp/b.json.gz`).
 
-### B. Your own server (VPS) with Docker — later, if you outgrow the free setup
+### B. Your own server (VPS) with Docker — only if you ever want to leave Cloudflare
 
-Cost: a VPS with **2 GB RAM** (DigitalOcean / Hetzner / AWS Lightsail / Hostinger, ~₹500–900 per month)
-and a domain name (~₹800 per year). An Indian region such as Mumbai or Bangalore is best.
+Cost: a small VPS (~₹500 per month) and a domain name (~₹800 per year).
 
 1. **Domain:** in your domain's DNS settings add an **A record**, e.g. `sales.mybakery.in` → your server's IP address.
 2. **Install Docker** on the server (Ubuntu): `curl -fsSL https://get.docker.com | sh`
@@ -154,31 +165,15 @@ and a domain name (~₹800 per year). An Indian region such as Mumbai or Bangalo
    git clone https://github.com/<you>/breadnew.git
    cd breadnew/bread-sales-tracker
    cp .env.example .env
-   nano .env        # fill in DOMAIN, passwords, BUSINESS_NAME
-   ```
-   For the secrets, use `openssl rand -hex 32` for `JWT_SECRET` and a separate one for `POSTGRES_PASSWORD`.
-4. **Start everything:**
-   ```bash
+   nano .env        # fill in DOMAIN, JWT_SECRET (openssl rand -hex 32), ADMIN_PASSWORD, BUSINESS_NAME
    docker compose up -d --build
    ```
-   The first build takes a few minutes. Caddy gets a free HTTPS certificate for your domain by itself.
-5. Open `https://sales.mybakery.in`, log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`, and
-   **change the password** under Settings.
+   Caddy gets a free HTTPS certificate for your domain by itself. The data is one SQLite file in the
+   `app-data` Docker volume; download backups from the website as above.
+4. To move your data: download a backup on the old site and restore it on the new one (see *Backups*).
 
-**Updating to a new version:** `git pull && docker compose up -d --build` (the database is kept; table changes are applied automatically).
-
-**Backups:** a copy of the database is written every day to `bread-sales-tracker/backups/` (kept 30 days).
-Copy that folder somewhere else regularly too (e.g. with `rclone` to Google Drive), so you still have
-your data if the server itself is lost. To restore a backup:
-```bash
-gunzip -c backups/bread-2026-01-31_0400.sql.gz | docker compose exec -T db psql -U bread -d bread
-```
-
-Useful commands: `docker compose ps` (status), `docker compose logs -f app` (server log),
-`docker compose restart app`.
-
-> Small VPS with 1 GB RAM? Building may run out of memory. Add swap first:
-> `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`
+Updating: `git pull && docker compose up -d --build` (table changes are applied automatically).
+Then build the Android app for the new address (`APP_URL`, see section 3).
 
 ---
 
@@ -201,8 +196,8 @@ Useful commands: `docker compose ps` (status), `docker compose logs -f app` (ser
 4. **Settings** → business name, phone and the message printed at the bottom of shared bills.
 
 > Want to try everything first with sample data (8 areas, 72 shops, 17 products, 4 drivers, 2 weeks of
-> bills)? On a **test** server run `docker compose exec app node dist/scripts/seed-demo.js` (it refuses to
-> run if you already have data). Demo drivers log in with 9000000001–9000000004, PIN 1234.
+> bills)? Run it on your own computer (see section 7: `npm run seed:demo`), not on the live site.
+> Demo drivers log in with 9000000001–9000000004, PIN 1234.
 
 ---
 
@@ -214,36 +209,27 @@ web app, so changes reach every phone as soon as the website is updated; the APK
 It keeps working without internet (Chrome keeps the app on the phone) and bills are saved on the phone
 until they can be sent. GitHub builds the APK for you (no Android Studio needed).
 
-### One-time setup
+### One-time setup: the signing key
 
-1. **Website address:** `appUrl` in `android-wrapper/gradle.properties` (now
-   `https://breadnew-sales.onrender.com/driver/`). If your website has a different address, change that line
-   (or set a repository variable `APP_URL`) and build again.
-2. **Signing key** (so Chrome trusts the app and updates install over the old app). Create it once on any
-   computer with Java:
-   ```bash
-   cd bread-sales-tracker/android-wrapper
-   sh scripts/create-keystore.sh
-   ```
-   and add two secrets under **Settings → Secrets and variables → Actions → Secrets**:
-   `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` (`ANDROID_KEY_ALIAS` defaults to `breadsales`,
-   `ANDROID_KEY_PASSWORD` to the keystore password). **Keep the `.jks` file and password safe and private.**
-3. **Tell the website about the key:** put the key's SHA-256 fingerprint in `ANDROID_CERT_SHA256`
-   (already set in `render.yaml` for the key created with this project; for a new key, get it with
-   `keytool -list -v -keystore bread-sales-release.jks`). The website then publishes
-   `/.well-known/assetlinks.json`, and Chrome shows the app without an address bar.
+Android apps are signed with a key. The same key must sign every version, otherwise phones refuse the
+update, and Chrome checks it before showing the app full screen. A key was created for this project and sent
+to you as a file (`bread-sales-release.jks`) with a text file holding its password and its
+`ANDROID_KEYSTORE_BASE64` text. Put those two values in the GitHub secrets (section 1, step 3) and keep both
+files safe and private: **if the key is lost, drivers must uninstall and reinstall the app**.
 
-   Without the signing secrets GitHub builds a **TEST** APK (`…-TEST.apk`): it works, but shows a small
-   address bar and can't be updated in place. Use it only for trying out.
+To make a new key instead, on any computer with Java: `cd android-wrapper && sh scripts/create-keystore.sh`
+(it prints the two secret values). The website learns the key's fingerprint automatically on the next run.
+
+Without the signing secrets GitHub builds only a **TEST** APK (`…-TEST.apk`, under the run's *Artifacts*):
+it works, but shows a small address bar and cannot be updated in place. Use it only for trying out.
 
 ### Getting the APK
 
-* **Release for drivers:** create a tag: `git tag bread-sales-v1.0.0 && git push --tags` (or ask Claude to do
-  it). GitHub builds the signed APK and publishes it under **Releases**. Drivers always download the newest
-  version from one fixed link:
+* **For drivers:** after **Run workflow** (section 1), the signed app is published under **Releases**.
+  Drivers always download the newest version from one fixed link:
   **https://github.com/jaikaran12/breadnew/releases/latest/download/bread-sales.apk**
-  (this link is also shown on the website's Drivers page via `APP_DOWNLOAD_URL`).
-* Every other build also makes an APK: open **Actions → Bread Sales → the run → Artifacts**.
+  (also shown on the website's Drivers page).
+* Every other run also builds an APK: **Actions → Bread Sales → the run → Artifacts**.
 
 ### Installing on a driver's phone (Android 7 or newer, with Chrome)
 
@@ -252,7 +238,6 @@ until they can be sent. GitHub builds the APK for you (no Android Studio needed)
 2. Android asks to allow **“Install unknown apps”** for WhatsApp/Chrome — allow it, then **Install**.
    If Play Protect shows a warning about an unknown app, choose **More details → Install anyway**.
 3. Open **Bread Sales**, choose हिंदी or English, enter the driver's mobile number and PIN.
-   (On the free plan the very first opening can take about a minute while the website wakes up.)
 4. The app downloads the shop list and prices. From then on it works even without internet.
 
 **Updates:** website changes reach the app automatically (the next time it is opened). A new APK is only
@@ -288,48 +273,50 @@ screen**. It is the same app.
 
 ---
 
-## 5. Settings reference (`.env`)
+## 5. Settings reference
+
+On Cloudflare the settings are in `server/wrangler.jsonc` (`vars`; change, push, done) and the secrets are
+set by the workflow. On your own server they go in `.env`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DOMAIN` | — | (docker compose) your web address for HTTPS |
-| `POSTGRES_PASSWORD` | — | (docker compose) database password |
-| `DATABASE_URL` | — | PostgreSQL address (set automatically by docker compose / Render) |
-| `DATABASE_SSL` | off | `true` or `no-verify` if your database provider requires SSL |
-| `JWT_SECRET` | — | long random text used to sign logins (required) |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | — | first admin account, created only when there is none |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | owner / — | first admin account, created only when there is none (change the password later in Settings) |
 | `BUSINESS_NAME` | My Bakery | first business name (change later in Settings) |
 | `APP_TIMEZONE` | Asia/Kolkata | decides which day a bill belongs to |
 | `DRIVER_CANCEL_WINDOW_MINUTES` | 30 | how long a driver can cancel their own bill (0 = never) |
-| `APP_DOWNLOAD_URL` | — | link to the APK, shown on the Drivers page |
+| `APP_DOWNLOAD_URL` | (set by the workflow) | link to the APK, shown in Settings |
 | `ANDROID_APP_ID` | com.breadsales.driver | package name of the Android wrapper app |
-| `ANDROID_CERT_SHA256` | — | SHA-256 fingerprint(s) of the app's signing key, for `/.well-known/assetlinks.json` |
+| `ANDROID_CERT_SHA256` | (set by the workflow) | SHA-256 fingerprint(s) of the app's signing key, for `/.well-known/assetlinks.json` |
+| `JWT_SECRET` | (created once by the workflow) | long random text used to sign logins |
+| `DATABASE_PATH` | server/data/bread.sqlite | own server only: the SQLite database file |
+| `DOMAIN` | — | own server only (docker compose): your web address for HTTPS |
 | `COOKIE_SECURE` | true | set `false` only when testing without HTTPS |
-| `TRUST_PROXY` | 1 | number of proxies in front of the server (Caddy / Render) |
+| `TRUST_PROXY` | 1 | own server only: number of proxies in front of the server (Caddy) |
 | `LOGIN_RATE_LIMIT` | 30 | login attempts allowed per network per 15 minutes |
 
 ---
 
 ## 6. Security
 
-* Website login uses a secure, HTTP-only cookie; passwords and PINs are stored only as bcrypt hashes.
+* Website login uses a secure, HTTP-only cookie; passwords and PINs are stored only as salted PBKDF2 hashes.
 * Five wrong PINs lock that driver for 15 minutes, and logins per network are rate limited.
 * Turning a driver off, or changing their PIN, logs their phone out immediately. If a phone is lost, use
   **Drivers → Log out phone**.
 * The Android app only opens your own `https://` website; Chrome verifies that the app and the website belong
   together (Digital Asset Links) before showing it full screen.
-* Keep `.env`, the signing key (`.jks`) and backups private. Never commit them to Git.
+* Keep the Cloudflare token, `.env`, the signing key (`.jks`) and backups private. Never commit them to Git;
+  the token and key live only in GitHub secrets.
 
 ---
 
 ## 7. For developers
 
-Requirements: Node.js 22+, PostgreSQL 14+ (or Docker).
+Requirements: Node.js 22.13+ (nothing else: data is kept in a SQLite file).
 
 ```bash
-# Server (http://localhost:8080)
+# Server (http://localhost:8080), data in server/data/bread.sqlite
 cd server
-cp .env.example .env              # points to postgres://bread:bread@localhost:5432/bread_dev
+cp .env.example .env
 npm install
 npm run seed:demo                 # optional demo data
 npm run dev
@@ -341,18 +328,29 @@ cd admin-web && npm install && npm run dev
 cd driver-app && npm install && npm run dev
 ```
 
+The same server on Cloudflare's own runtime (exactly like production, with a local D1 database):
+
+```bash
+(cd admin-web && npm run build) && (cd driver-app && npm run build)
+cd server && cp .dev.vars.example .dev.vars && npm run build:site && npm run cf:dev   # http://localhost:8787
+```
+
 Tests:
 
 ```bash
-cd server && npm test             # API tests against a real PostgreSQL (TEST_DATABASE_URL, default bread_test)
+cd server && npm test             # API tests on an in-memory SQLite database; also checks Cloudflare D1 limits
+cd admin-web && npm test          # CSV downloads
 cd driver-app && npm test         # bill total / merge logic
 ```
+
+Database changes: add a new file `server/migrations/0002_….sql` (SQLite). It is applied on the next deploy
+(`wrangler d1 migrations apply`) and when the Node server starts.
 
 Android wrapper locally (needs Android Studio or the Android SDK + JDK 21):
 
 ```bash
 cd android-wrapper
-./gradlew assembleDebug                  # opens appUrl from gradle.properties; or APP_URL=https://… ./gradlew …
+APP_URL=https://bread-sales.<your-name>.workers.dev/driver/ ./gradlew assembleDebug
 ```
 
 Changing the app id (`com.breadsales.driver`, needed before publishing on the Play Store): edit
@@ -372,9 +370,10 @@ All amounts are integers in **paise** (₹42.50 = `4250`). Dates are `YYYY-MM-DD
 | `POST /api/driver/sales/:id/cancel` | driver | cancel own bill (time limit, not after the day is tallied) |
 | `POST /api/driver/stores` | driver | add a shop |
 | `POST /api/admin/login` | admin | sets the login cookie |
-| `GET /api/admin/dashboard?date=` | admin | dashboard numbers |
-| `GET /api/admin/sales` · `/sales/export.csv` · `/sales/:id` · `POST /sales/:id/cancel` · `/restore` | admin | bills |
+| `GET /api/admin/dashboard?date=` · `/dashboard/trend?date=` | admin | dashboard numbers, 14-day chart |
+| `GET /api/admin/backup/info` · `/backup/table/:name?after=&upto=` · `POST /backup/done` | admin | backup, downloaded in pieces |
+| `GET /api/admin/sales` · `/sales/export?date=` (one day, in pages, for CSV files) · `/sales/:id` · `POST /sales/:id/cancel` · `/restore` | admin | bills |
 | `GET/PUT/DELETE /api/admin/tally` | admin | cash tally per driver per day |
-| `GET /api/admin/reports?groupBy=product\|store\|area\|driver\|day&format=json\|csv` | admin | reports |
-| `/api/admin/areas`, `/stores` (+ `/import`, `/export.csv`), `/products` (+ `/reorder`, `/:id/price-history`), `/drivers` (+ `/:id/pin`, `/unlock`, `/logout`), `/settings`, `/admins`, `/password` | admin | manage data |
+| `GET /api/admin/reports?groupBy=product\|store\|area\|driver\|day` | admin | reports (the website makes the CSV) |
+| `/api/admin/areas`, `/stores` (+ `/import`), `/products` (+ `/reorder`, `/:id/price-history`), `/drivers` (+ `/:id/pin`, `/unlock`, `/logout`), `/settings`, `/admins`, `/password` | admin | manage data |
 | `GET /api/health` | anyone | health check |

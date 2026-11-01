@@ -2,7 +2,7 @@ import { Router } from 'express';
 import cors from 'cors';
 import { z } from 'zod';
 import type { Config } from '../config.js';
-import { isUniqueViolation, many, one, type Pool } from '../db.js';
+import { isUniqueViolation, nowIso, type Db } from '../db.js';
 import { badRequest, forbidden, HttpError, notFound } from '../errors.js';
 import {
   burnTime,
@@ -20,11 +20,13 @@ import {
   SALE_SELECT,
   SUMMARY_COLUMNS,
   type DaySummary,
-  type Sale,
+  type SaleRow,
 } from '../services/sales.js';
+import { catalogVersion } from '../services/catalog.js';
+import { bumpCatalogStatement } from '../services/settings.js';
 import { parseDateParam, todayInZone } from '../util/dates.js';
 import { cleanPhone, normalizeMobile } from '../util/phone.js';
-import type { RateLimitRequestHandler } from 'express-rate-limit';
+import type { RequestHandler } from 'express';
 
 const loginSchema = z.object({
   phone: z.string().trim().min(1, 'Enter your phone number'),
@@ -63,7 +65,7 @@ function idParam(value: string | string[] | undefined): number {
   return id;
 }
 
-export function driverRouter(config: Config, pool: Pool, loginLimiter: RateLimitRequestHandler): Router {
+export function driverRouter(config: Config, db: Db, loginLimiter: RequestHandler): Router {
   const router = Router();
 
   // The Android app runs on its own origin (https://localhost) and authenticates with a
@@ -78,7 +80,7 @@ export function driverRouter(config: Config, pool: Pool, loginLimiter: RateLimit
       await burnTime(body.pin);
       throw wrong;
     }
-    const driver = await one<{
+    const driver = await db.first<{
       id: number;
       name: string;
       phone: string;
@@ -86,41 +88,39 @@ export function driverRouter(config: Config, pool: Pool, loginLimiter: RateLimit
       isActive: boolean;
       tokenVersion: number;
       failedLoginAttempts: number;
-      lockedUntil: Date | null;
+      lockedUntil: string | null;
     }>(
-      pool,
       `SELECT id, name, phone, pin_hash AS "pinHash", is_active AS "isActive", token_version AS "tokenVersion",
               failed_login_attempts AS "failedLoginAttempts", locked_until AS "lockedUntil"
-         FROM drivers WHERE phone = $1`,
+         FROM drivers WHERE phone = ?1`,
       [phone],
     );
     if (!driver) {
       await burnTime(body.pin);
       throw wrong;
     }
-    if (driver.lockedUntil && driver.lockedUntil.getTime() > Date.now()) {
-      const minutes = Math.ceil((driver.lockedUntil.getTime() - Date.now()) / 60000);
+    if (driver.lockedUntil && Date.parse(driver.lockedUntil) > Date.now()) {
+      const minutes = Math.ceil((Date.parse(driver.lockedUntil) - Date.now()) / 60000);
       throw new HttpError(429, `Too many wrong PINs. Try again after ${minutes} minute(s).`, 'locked');
     }
     const ok = await verifySecret(body.pin, driver.pinHash);
     if (!ok) {
       const attempts = driver.failedLoginAttempts + 1;
       if (attempts >= MAX_FAILED_LOGINS) {
-        await pool.query(
-          `UPDATE drivers SET failed_login_attempts = 0,
-                  locked_until = now() + ($2 || ' minutes')::interval WHERE id = $1`,
-          [driver.id, String(LOCK_MINUTES)],
-        );
+        await db.run('UPDATE drivers SET failed_login_attempts = 0, locked_until = ?2 WHERE id = ?1', [
+          driver.id,
+          new Date(Date.now() + LOCK_MINUTES * 60000).toISOString(),
+        ]);
         throw new HttpError(429, `Too many wrong PINs. Try again after ${LOCK_MINUTES} minutes.`, 'locked');
       }
-      await pool.query('UPDATE drivers SET failed_login_attempts = $2 WHERE id = $1', [driver.id, attempts]);
+      await db.run('UPDATE drivers SET failed_login_attempts = ?2 WHERE id = ?1', [driver.id, attempts]);
       throw wrong;
     }
     if (!driver.isActive) throw forbidden('Your account is turned off. Please contact the owner.', 'driver_disabled');
-    await pool.query(
-      `UPDATE drivers SET failed_login_attempts = 0, locked_until = NULL, last_login_at = now(), last_seen_at = now()
-        WHERE id = $1`,
-      [driver.id],
+    await db.run(
+      `UPDATE drivers SET failed_login_attempts = 0, locked_until = NULL, last_login_at = ?2, last_seen_at = ?2
+        WHERE id = ?1`,
+      [driver.id, nowIso()],
     );
     res.json({
       token: signDriverToken(config, driver.id, driver.tokenVersion),
@@ -128,14 +128,14 @@ export function driverRouter(config: Config, pool: Pool, loginLimiter: RateLimit
     });
   });
 
-  const auth = requireDriver(config, pool);
+  const auth = requireDriver(config, db);
 
   router.get('/me', auth, async (req, res) => {
     res.json({ driver: req.driver, serverTime: new Date().toISOString(), today: todayInZone(config.appTimezone) });
   });
 
   router.get('/catalog', auth, async (_req, res) => {
-    const catalog = await getCatalog(pool, config);
+    const catalog = await getCatalog(db, config);
     res.set('Cache-Control', 'no-cache');
     res.json({
       ...catalog,
@@ -147,26 +147,23 @@ export function driverRouter(config: Config, pool: Pool, loginLimiter: RateLimit
 
   router.post('/sales', auth, async (req, res) => {
     const input = saleSchema.parse(req.body);
-    const { sale, created } = await createSale(pool, config, req.driver!.id, input);
-    const catalog = await getCatalog(pool, config);
-    res.status(created ? 201 : 200).json({ sale, created, catalogVersion: catalog.version });
+    const { sale, created } = await createSale(db, config, req.driver!.id, input);
+    res.status(created ? 201 : 200).json({ sale, created, catalogVersion: await catalogVersion(db, config) });
   });
 
   router.get('/sales', auth, async (req, res) => {
     const today = todayInZone(config.appTimezone);
     const date = parseDateParam(req.query.date, today);
-    const rows = await many<Omit<Sale, 'items' | 'priceMismatch'>>(
-      pool,
-      `${SALE_SELECT} WHERE s.driver_id = $1 AND s.sale_date = $2 ORDER BY s.sold_at DESC LIMIT 1000`,
+    const rows = await db.all<SaleRow>(
+      `${SALE_SELECT} WHERE s.driver_id = ?1 AND s.sale_date = ?2 ORDER BY s.sold_at DESC LIMIT 1000`,
       [req.driver!.id, date],
     );
-    const sales = await attachItems(pool, rows);
-    const summary = await one<DaySummary>(
-      pool,
-      `SELECT ${SUMMARY_COLUMNS} FROM sales WHERE driver_id = $1 AND sale_date = $2`,
+    const sales = await attachItems(db, rows);
+    const summary = await db.first<DaySummary>(
+      `SELECT ${SUMMARY_COLUMNS} FROM sales WHERE driver_id = ?1 AND sale_date = ?2`,
       [req.driver!.id, date],
     );
-    const settled = await one(pool, 'SELECT 1 FROM settlements WHERE driver_id = $1 AND settle_date = $2', [
+    const settled = await db.first('SELECT 1 AS x FROM settlements WHERE driver_id = ?1 AND settle_date = ?2', [
       req.driver!.id,
       date,
     ]);
@@ -177,30 +174,31 @@ export function driverRouter(config: Config, pool: Pool, loginLimiter: RateLimit
     if (config.driverCancelWindowMinutes === 0) {
       throw forbidden('Cancelling bills from the phone is turned off. Please call the owner.', 'cancel_disabled');
     }
-    const sale = await cancelSaleByDriver(pool, config, req.driver!.id, idParam(req.params.id));
+    const sale = await cancelSaleByDriver(db, config, req.driver!.id, idParam(req.params.id));
     res.json({ sale });
   });
 
   router.post('/stores', auth, async (req, res) => {
     const body = newStoreSchema.parse(req.body);
-    const area = await one<{ id: number }>(pool, 'SELECT id FROM areas WHERE id = $1 AND is_active', [body.areaId]);
+    const area = await db.first<{ id: number }>('SELECT id FROM areas WHERE id = ?1 AND is_active = 1', [body.areaId]);
     if (!area) throw badRequest('Area not found');
     try {
-      const store = await one(
-        pool,
-        `INSERT INTO stores (area_id, name, owner_name, phone, address, created_by_driver_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, area_id AS "areaId", name, owner_name AS "ownerName", phone, address`,
-        [body.areaId, body.name, body.ownerName || null, cleanPhone(body.phone), body.address || null, req.driver!.id],
-      );
-      res.status(201).json({ store, created: true });
+      const [inserted] = await db.batch([
+        {
+          sql: `INSERT INTO stores (area_id, name, owner_name, phone, address, created_by_driver_id)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                RETURNING id, area_id AS "areaId", name, owner_name AS "ownerName", phone, address`,
+          params: [body.areaId, body.name, body.ownerName || null, cleanPhone(body.phone), body.address || null, req.driver!.id],
+        },
+        bumpCatalogStatement(),
+      ]);
+      res.status(201).json({ store: inserted.rows[0], created: true });
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
       // Same name already exists in this area: use that shop instead of creating a duplicate.
-      const existing = await one<{ isActive: boolean } & Record<string, unknown>>(
-        pool,
+      const existing = await db.first<{ isActive: boolean } & Record<string, unknown>>(
         `SELECT id, area_id AS "areaId", name, owner_name AS "ownerName", phone, address, is_active AS "isActive"
-           FROM stores WHERE area_id = $1 AND lower(name) = lower($2)`,
+           FROM stores WHERE area_id = ?1 AND lower(name) = lower(?2)`,
         [body.areaId, body.name],
       );
       if (!existing) throw err;

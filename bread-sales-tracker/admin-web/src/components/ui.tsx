@@ -290,3 +290,33 @@ export function InlineBar(props: { value: number; max: number }) {
     </div>
   );
 }
+
+/**
+ * Button for downloads that are put together in the browser (CSV files, backup): shows progress while
+ * it works and the error if it fails.
+ */
+export function DownloadButton(props: {
+  label: string;
+  run: (progress: (done: number, total: number) => void) => Promise<void>;
+  className?: string;
+  onDone?: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const click = async () => {
+    if (busy) return;
+    setBusy('Preparing…');
+    try {
+      await props.run((done, total) => setBusy(total > 1 ? `Preparing… ${Math.floor((done / total) * 100)}%` : 'Preparing…'));
+      props.onDone?.();
+    } catch (err) {
+      toast(err instanceof Error ? `Download failed: ${err.message}` : 'Download failed', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <button type="button" className={props.className ?? 'btn btn-light'} onClick={click} disabled={busy !== null} aria-busy={busy !== null}>
+      {busy ?? props.label}
+    </button>
+  );
+}

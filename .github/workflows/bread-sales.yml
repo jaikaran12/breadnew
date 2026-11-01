@@ -1,11 +1,17 @@
-# Bread Sales: tests + builds for everything in bread-sales-tracker/
-# - server tests (PostgreSQL), web app builds, Docker image, and the Android app.
-# - The Android app is a thin wrapper that opens the driver web app (bread-sales-tracker/android-wrapper).
-#   Its web address is appUrl in android-wrapper/gradle.properties, or the repository variable APP_URL.
-# - Push a tag like "bread-sales-v1.0.0" (or run this workflow on such a tag): publishes the APK as a GitHub
-#   Release. Drivers always get the newest app from .../releases/latest/download/bread-sales.apk
-# Signing key secrets (Settings > Secrets and variables > Actions > Secrets), see bread-sales-tracker/README.md:
-#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD   (ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD optional)
+# Bread Sales (everything is in bread-sales-tracker/): tests, putting it online, and the Android app.
+#
+# Every run tests the server and both websites.
+# Runs started from the Actions tab ("Run workflow") and pushes to the default branch also:
+#   1. put the new version online on Cloudflare (free plan; the database is created the first time),
+#   2. build the Android app for that web address. Runs started from the Actions tab publish it as a
+#      GitHub Release, so drivers always get the newest app from
+#      https://github.com/<owner>/<repo>/releases/latest/download/bread-sales.apk
+#
+# One-time setup: repository secrets (Settings > Secrets and variables > Actions), see the README:
+#   CLOUDFLARE_API_TOKEN       Cloudflare API token (template "Edit Cloudflare Workers" + D1 Edit)
+#   ADMIN_PASSWORD             first password for the admin website (user "owner"), at least 8 characters
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD   the Android app's signing key
+#   CLOUDFLARE_ACCOUNT_ID      only if your Cloudflare login has more than one account
 name: Bread Sales
 
 on:
@@ -13,8 +19,6 @@ on:
     paths:
       - 'bread-sales-tracker/**'
       - '.github/workflows/bread-sales.yml'
-    tags:
-      - 'bread-sales-v*'
   pull_request:
     paths:
       - 'bread-sales-tracker/**'
@@ -23,7 +27,8 @@ on:
 
 concurrency:
   group: bread-sales-${{ github.ref }}
-  cancel-in-progress: true
+  # Never stop a deployment halfway; only superseded pull request checks are cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -35,20 +40,6 @@ jobs:
     defaults:
       run:
         working-directory: bread-sales-tracker/server
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: bread
-          POSTGRES_PASSWORD: bread
-          POSTGRES_DB: bread_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U bread -d bread_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -60,11 +51,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
-        env:
-          TEST_DATABASE_URL: postgres://bread:bread@localhost:5432/bread_test
 
   web:
-    name: Admin + driver web apps
+    name: Admin website + driver app
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,28 +64,129 @@ jobs:
           cache-dependency-path: |
             bread-sales-tracker/admin-web/package-lock.json
             bread-sales-tracker/driver-app/package-lock.json
-      - name: Admin website
+      - name: Admin website (tests + build)
         working-directory: bread-sales-tracker/admin-web
         run: |
           npm ci
+          npm test
           npm run build
-      - name: Driver app (tests + web build)
+      - name: Driver app (tests + build)
         working-directory: bread-sales-tracker/driver-app
         run: |
           npm ci
           npm test
           npm run build
+      - name: Website files for Cloudflare
+        run: node bread-sales-tracker/server/cloudflare/build-site.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: bread-sales-tracker/server/site
+          if-no-files-found: error
+          retention-days: 7
 
   docker:
-    name: Docker image
+    name: Docker image (for running on your own server instead)
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build production image
+      - name: Build image
         run: docker build -t bread-sales:ci bread-sales-tracker
 
+  deploy:
+    name: Put online (Cloudflare)
+    needs: [server, web]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    defaults:
+      run:
+        working-directory: bread-sales-tracker/server
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Check that Cloudflare is set up
+        id: ready
+        working-directory: .
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::warning::Not put online: add the CLOUDFLARE_API_TOKEN secret first (see bread-sales-tracker/README.md, 'Put it online')."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.ready.outputs.ok == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.ready.outputs.ok == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bread-sales-tracker/server/package-lock.json
+      - uses: actions/setup-java@v4
+        if: steps.ready.outputs.ok == 'true'
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/download-artifact@v4
+        if: steps.ready.outputs.ok == 'true'
+        with:
+          name: site
+          path: bread-sales-tracker/server/site
+      - name: Android app key fingerprint (lets the app open full screen)
+        if: steps.ready.outputs.ok == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "No Android signing key secret yet - skipping."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          fp=$(keytool -list -v -keystore "$RUNNER_TEMP/release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "${KEY_ALIAS:-breadsales}" \
+            | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -1)
+          rm -f "$RUNNER_TEMP/release.jks"
+          if [ -z "$fp" ]; then
+            echo "::error::Could not read the Android signing key. Check ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+          echo "Signing key SHA-256: $fp"
+          echo "ANDROID_CERT_SHA256=$fp" >> "$GITHUB_ENV"
+      - name: Deploy
+        id: deploy
+        if: steps.ready.outputs.ok == 'true'
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          WORKERS_SUBDOMAIN: ${{ vars.WORKERS_SUBDOMAIN || github.repository_owner }}
+          APP_DOWNLOAD_URL: https://github.com/${{ github.repository }}/releases/latest/download/bread-sales.apk
+        run: |
+          npm ci
+          bash cloudflare/deploy.sh
+      - name: Summary
+        if: steps.deploy.outputs.url != ''
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          {
+            echo "## Bread Sales is online"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Owner website | $URL (username \`owner\`) |"
+            echo "| Driver app in a browser | $URL/driver/ |"
+            echo "| Android app for drivers | https://github.com/${{ github.repository }}/releases/latest/download/bread-sales.apk |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   android:
-    name: Android app (wrapper)
+    name: Android app
+    needs: [server, web, deploy]
+    # Also runs when "deploy" was skipped (e.g. pull requests), but not when it failed.
+    if: ${{ !cancelled() && needs.server.result == 'success' && needs.web.result == 'success' && needs.deploy.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -106,6 +196,7 @@ jobs:
     env:
       VERSION_CODE: ${{ github.run_number }}
       VERSION_NAME: 1.0.${{ github.run_number }}
+      LIVE_URL: ${{ needs.deploy.outputs.url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -117,17 +208,13 @@ jobs:
       - name: Prepare signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          IS_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/bread-sales-v') }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
             echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Release signing key found."
-          elif [ "$IS_RELEASE_TAG" = "true" ]; then
-            echo "::error::A release needs the signing key. Add the ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD secrets (see README)."
-            exit 1
           else
-            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret - building a TEST (debug) APK. Set up the release key before giving the app to drivers (see README)."
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret - building a TEST (debug) APK. Add the signing key before giving the app to drivers (see README)."
           fi
       - name: Build APK
         env:
@@ -136,7 +223,8 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$APP_URL_VAR" ]; then export APP_URL="$APP_URL_VAR"; fi
+          if [ -n "$LIVE_URL" ]; then export APP_URL="$LIVE_URL/driver/";
+          elif [ -n "$APP_URL_VAR" ]; then export APP_URL="$APP_URL_VAR"; fi
           echo "The app opens: ${APP_URL:-$(sed -n 's/^appUrl=//p' gradle.properties)}"
           chmod +x gradlew
           mkdir -p "$GITHUB_WORKSPACE/apk"
@@ -153,21 +241,27 @@ jobs:
           name: bread-sales-android-${{ env.VERSION_NAME }}
           path: apk/*.apk
           if-no-files-found: error
-      - name: Prepare release files (tags only)
-        if: startsWith(github.ref, 'refs/tags/bread-sales-v')
+      - name: Prepare release files
+        id: release
+        if: github.event_name == 'workflow_dispatch' && env.LIVE_URL != '' && env.ANDROID_KEYSTORE_FILE != ''
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p release
           cp "apk/bread-sales-$VERSION_NAME.apk" "release/bread-sales-$VERSION_NAME.apk"
           # Same file under a fixed name, so .../releases/latest/download/bread-sales.apk always works.
           cp "apk/bread-sales-$VERSION_NAME.apk" release/bread-sales.apk
-      - name: Publish GitHub Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/bread-sales-v')
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Publish GitHub Release
+        if: steps.release.outputs.ready == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: bread-sales-v${{ env.VERSION_NAME }}
+          target_commitish: ${{ github.sha }}
+          name: Bread Sales driver app ${{ env.VERSION_NAME }}
+          make_latest: true
           files: release/*.apk
           body: |
-            **Bread Sales driver app ${{ env.VERSION_NAME }}**
+            **Bread Sales driver app ${{ env.VERSION_NAME }}** - opens ${{ env.LIVE_URL }}/driver/
 
             Install on the driver's phone (Android 7 or newer, with Chrome): open this link on the phone,
             download, and tap Install (allow "Install unknown apps" for Chrome or WhatsApp when asked):

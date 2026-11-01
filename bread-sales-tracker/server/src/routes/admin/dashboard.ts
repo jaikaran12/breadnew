@@ -1,85 +1,91 @@
 import { Router } from 'express';
 import type { Config } from '../../config.js';
-import { many, one, type Pool } from '../../db.js';
+import type { Db } from '../../db.js';
 import { SUMMARY_COLUMNS } from '../../services/sales.js';
-import { parseDateParam, todayInZone } from '../../util/dates.js';
+import { addDays, parseDateParam, todayInZone } from '../../util/dates.js';
+
+const TREND_DAYS = 14;
 
 /** Everything on the home screen of the admin site for one day. */
-export function dashboardRouter(config: Config, pool: Pool): Router {
+export function dashboardRouter(config: Config, db: Db): Router {
   const router = Router();
 
   router.get('/', async (req, res) => {
     const today = todayInZone(config.appTimezone);
     const date = parseDateParam(req.query.date, today);
-    const [totals, byDriver, byArea, byProduct, trend, recent, counts] = await Promise.all([
-      one(
-        pool,
+    const [totals, byDriver, byArea, byProduct, recent, counts] = await Promise.all([
+      db.first(
         `SELECT ${SUMMARY_COLUMNS},
                 coalesce(sum(total_paise) FILTER (WHERE status = 'cancelled'), 0) AS "cancelledPaise",
-                count(DISTINCT store_id) FILTER (WHERE status = 'completed')::int AS "storesVisited",
-                count(DISTINCT driver_id) FILTER (WHERE status = 'completed')::int AS "activeDrivers"
-           FROM sales WHERE sale_date = $1`,
+                count(DISTINCT store_id) FILTER (WHERE status = 'completed') AS "storesVisited",
+                count(DISTINCT driver_id) FILTER (WHERE status = 'completed') AS "activeDrivers"
+           FROM sales WHERE sale_date = ?1`,
         [date],
       ),
-      many(
-        pool,
+      db.all(
         `SELECT d.id AS "driverId", d.name, ${SUMMARY_COLUMNS},
-                count(DISTINCT s.store_id) FILTER (WHERE s.status = 'completed')::int AS "storesVisited",
+                count(DISTINCT s.store_id) FILTER (WHERE s.status = 'completed') AS "storesVisited",
                 max(s.sold_at) AS "lastSaleAt"
            FROM sales s JOIN drivers d ON d.id = s.driver_id
-          WHERE s.sale_date = $1
+          WHERE s.sale_date = ?1
           GROUP BY d.id ORDER BY "totalPaise" DESC`,
         [date],
       ),
-      many(
-        pool,
+      db.all(
         `SELECT a.id AS "areaId", a.name,
-                count(s.id)::int AS bills, coalesce(sum(s.total_paise), 0) AS "totalPaise",
-                count(DISTINCT s.store_id)::int AS "storesVisited",
-                (SELECT count(*)::int FROM stores x WHERE x.area_id = a.id AND x.is_active) AS "totalStores"
+                count(s.id) AS bills, coalesce(sum(s.total_paise), 0) AS "totalPaise",
+                count(DISTINCT s.store_id) AS "storesVisited",
+                (SELECT count(*) FROM stores x WHERE x.area_id = a.id AND x.is_active = 1) AS "totalStores"
            FROM sales s JOIN areas a ON a.id = s.area_id
-          WHERE s.sale_date = $1 AND s.status = 'completed'
+          WHERE s.sale_date = ?1 AND s.status = 'completed'
           GROUP BY a.id ORDER BY "totalPaise" DESC`,
         [date],
       ),
-      many(
-        pool,
-        `SELECT p.id AS "productId", p.name, p.color, sum(si.quantity)::int AS quantity,
+      db.all(
+        `SELECT p.id AS "productId", p.name, p.color, sum(si.quantity) AS quantity,
                 sum(si.line_total_paise) AS "totalPaise"
            FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id
-          WHERE s.sale_date = $1 AND s.status = 'completed'
+          WHERE s.sale_date = ?1 AND s.status = 'completed'
           GROUP BY p.id ORDER BY p.sort_order, lower(p.name)`,
         [date],
       ),
-      many(
-        pool,
-        `SELECT to_char(d.day, 'YYYY-MM-DD') AS date, count(s.id)::int AS bills,
-                coalesce(sum(s.total_paise), 0) AS "totalPaise"
-           FROM generate_series($1::date - 13, $1::date, interval '1 day') AS d(day)
-           LEFT JOIN sales s ON s.sale_date = d.day::date AND s.status = 'completed'
-          GROUP BY d.day ORDER BY d.day`,
-        [date],
-      ),
-      many(
-        pool,
+      db.all(
         `SELECT s.id, s.sold_at AS "soldAt", s.payment_mode AS "paymentMode", s.total_paise AS "totalPaise",
                 s.total_quantity AS "totalQuantity", s.status, d.name AS "driverName", st.name AS "storeName",
                 a.name AS "areaName"
            FROM sales s JOIN drivers d ON d.id = s.driver_id JOIN stores st ON st.id = s.store_id
            JOIN areas a ON a.id = s.area_id
-          WHERE s.sale_date = $1
+          WHERE s.sale_date = ?1
           ORDER BY s.sold_at DESC, s.id DESC LIMIT 15`,
         [date],
       ),
-      one(
-        pool,
-        `SELECT (SELECT count(*)::int FROM stores WHERE is_active) AS stores,
-                (SELECT count(*)::int FROM products WHERE is_active) AS products,
-                (SELECT count(*)::int FROM drivers WHERE is_active) AS drivers,
-                (SELECT count(*)::int FROM areas WHERE is_active) AS areas`,
+      db.first(
+        `SELECT (SELECT count(*) FROM stores WHERE is_active = 1) AS stores,
+                (SELECT count(*) FROM products WHERE is_active = 1) AS products,
+                (SELECT count(*) FROM drivers WHERE is_active = 1) AS drivers,
+                (SELECT count(*) FROM areas WHERE is_active = 1) AS areas`,
       ),
     ]);
-    res.json({ date, today, totals, byDriver, byArea, byProduct, trend, recent, counts });
+    res.json({ date, today, totals, byDriver, byArea, byProduct, recent, counts });
+  });
+
+  /** Sales of the 14 days up to `date` (a separate call: it changes slowly, so the website asks less often). */
+  router.get('/trend', async (req, res) => {
+    const today = todayInZone(config.appTimezone);
+    const date = parseDateParam(req.query.date, today);
+    const first = addDays(date, -(TREND_DAYS - 1));
+    const rows = await db.all<{ date: string; bills: number; totalPaise: number }>(
+      `SELECT sale_date AS date, count(*) AS bills, sum(total_paise) AS "totalPaise"
+         FROM sales WHERE sale_date BETWEEN ?1 AND ?2 AND status = 'completed'
+        GROUP BY sale_date`,
+      [first, date],
+    );
+    const byDate = new Map(rows.map((r) => [r.date, r]));
+    const trend = Array.from({ length: TREND_DAYS }, (_, i) => {
+      const day = addDays(first, i);
+      return { date: day, bills: byDate.get(day)?.bills ?? 0, totalPaise: byDate.get(day)?.totalPaise ?? 0 };
+    });
+    res.json({ date, trend });
   });
 
   return router;

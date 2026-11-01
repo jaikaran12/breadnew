@@ -51,7 +51,7 @@ export function TallyPage() {
   const q = useQuery({
     queryKey: ['tally', date],
     queryFn: () => api.get<TallyResponse>('/tally', { date }),
-    refetchInterval: date === todayIn() && !idle ? 30_000 : false,
+    refetchInterval: date === todayIn() && !idle ? 60_000 : false,
   });
   const t = q.data?.totals;
 
