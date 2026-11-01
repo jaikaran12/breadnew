@@ -19,7 +19,6 @@ import type {
 } from './types';
 import { uuid } from './uuid';
 
-export const DEFAULT_SERVER_URL: string = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
 export const APP_VERSION: string = (import.meta.env.VITE_APP_VERSION as string | undefined) ?? '1.0.0';
 const DEFAULT_TZ = 'Asia/Kolkata';
 const HISTORY_DAYS_KEPT = 10;
@@ -32,7 +31,6 @@ export interface DraftState extends Draft {
 
 export interface State {
   lang: Lang;
-  serverUrl: string;
   auth: Auth | null;
   authMessage: MessageKey | null;
   catalog: Catalog | null;
@@ -53,7 +51,6 @@ export interface State {
 // Saved on the phone so nothing is lost if the app is closed or the phone restarts.
 const PERSISTED: Array<keyof State> = [
   'lang',
-  'serverUrl',
   'auth',
   'catalog',
   'catalogAt',
@@ -66,7 +63,6 @@ const PERSISTED: Array<keyof State> = [
 
 let state: State = {
   lang: load<Lang>('lang', 'hi'),
-  serverUrl: load<string>('serverUrl', DEFAULT_SERVER_URL),
   auth: load<Auth | null>('auth', null),
   authMessage: null,
   catalog: load<Catalog | null>('catalog', null),
@@ -151,14 +147,9 @@ export function showToast(text: string, kind: 'ok' | 'error' = 'ok') {
   toastTimer = setTimeout(() => setState({ toast: null }), kind === 'error' ? 4000 : 2500);
 }
 
+// The app is always served by the same server as the API (also inside the Android wrapper).
 function applyApiConfig() {
-  const base = state.serverUrl || (typeof window !== 'undefined' && !isNativeApp() ? window.location.origin : '');
-  configureApi({ baseUrl: base, token: state.auth?.token ?? null });
-}
-
-export function isNativeApp(): boolean {
-  const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
-  return Boolean(cap?.isNativePlatform?.());
+  configureApi({ baseUrl: '', token: state.auth?.token ?? null });
 }
 
 /** Called when the server says our login is no longer valid (PIN changed, driver turned off). */
@@ -446,20 +437,6 @@ export function wakeUp(options: { force?: boolean } = {}) {
 export const actions = {
   setLang(lang: Lang) {
     setState({ lang });
-  },
-
-  async setServerUrl(url: string): Promise<boolean> {
-    const clean = url.trim().replace(/\/+$/, '');
-    const target = clean || (isNativeApp() ? '' : window.location.origin);
-    if (!target) return false;
-    try {
-      await api.health(target);
-    } catch {
-      return false;
-    }
-    setState({ serverUrl: clean });
-    applyApiConfig();
-    return true;
   },
 
   async login(phone: string, pin: string): Promise<void> {

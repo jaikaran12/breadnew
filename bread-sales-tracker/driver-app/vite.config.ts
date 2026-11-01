@@ -4,8 +4,7 @@ import react from '@vitejs/plugin-react';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
-// `npm run build` -> web version served by the server at /driver/
-// `npm run build:android` -> bundled inside the Android app (reads .env.android for the server address)
+// Served by the server at /driver/. The Android app is a thin wrapper that opens that page in Chrome.
 export default defineConfig({
   base: './',
   plugins: [react()],
@@ -13,7 +12,7 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(process.env.APP_VERSION || pkg.version),
   },
   build: {
-    // Older Android phones have older WebView versions; keep the output conservative.
+    // Older phones may have older Chrome versions; keep the output conservative.
     target: ['es2019', 'chrome70'],
     outDir: 'dist',
     emptyOutDir: true,

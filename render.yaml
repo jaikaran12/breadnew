@@ -1,10 +1,12 @@
 # Render.com Blueprint for Bread Sales (the app itself lives in bread-sales-tracker/).
 # One-click setup: https://render.com/deploy?repo=https://github.com/jaikaran12/breadnew
-# Render looks for this file at the top of the repository, which is why it is not inside the folder.
+# Render only reads this file from the top of the repository, which is why it is not inside the folder.
 #
-# Starts on Render's FREE plans so you can try it at no cost. Before drivers use it for real,
-# upgrade both to paid plans in the Render dashboard (the free database is deleted after 30 days,
-# and the free web service sleeps when idle and takes ~1 minute to wake up).
+# Free setup (Rs 0/month, no credit card):
+#   - Website + API: Render free web service (sleeps after 15 idle minutes, wakes in about a minute).
+#   - Database: a free Neon PostgreSQL database (does not expire). Create it at neon.com first and paste
+#     its connection string as DATABASE_URL when Render asks.
+# See bread-sales-tracker/README.md, "Free hosting".
 services:
   - type: web
     name: breadnew-sales
@@ -13,7 +15,8 @@ services:
     region: singapore
     dockerfilePath: ./bread-sales-tracker/Dockerfile
     dockerContext: ./bread-sales-tracker
-    healthCheckPath: /api/health
+    # /api/ping does not touch the database, so the free database can sleep when nobody is working.
+    healthCheckPath: /api/ping
     autoDeploy: true
     buildFilter:
       paths:
@@ -24,30 +27,24 @@ services:
         - bread-sales-tracker/docs/**
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: breadnew-sales-db
-          property: connectionString
-      - key: JWT_SECRET
-        generateValue: true
-      - key: ADMIN_USERNAME
-        value: owner
+        sync: false
       - key: ADMIN_PASSWORD
         sync: false
       - key: BUSINESS_NAME
         sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: owner
       - key: APP_TIMEZONE
         value: Asia/Kolkata
       - key: DRIVER_CANCEL_WINDOW_MINUTES
         value: '30'
       - key: APP_DOWNLOAD_URL
         value: https://github.com/jaikaran12/breadnew/releases/latest/download/bread-sales.apk
-
-databases:
-  - name: breadnew-sales-db
-    plan: free
-    region: singapore
-    databaseName: bread
-    user: bread
-    postgresMajorVersion: '16'
-    # Only the web service (inside Render) may connect; no access from the internet.
-    ipAllowList: []
+      # Android app = wrapper around https://<this site>/driver/. Fingerprint of its signing key
+      # (public information), so Chrome shows the app full screen without an address bar.
+      - key: ANDROID_APP_ID
+        value: com.breadsales.driver
+      - key: ANDROID_CERT_SHA256
+        value: AC:AB:F1:4C:D1:A4:D4:EA:FB:3F:06:97:56:79:F2:7C:29:1E:24:71:A0:64:A9:AB:4B:97:60:52:A9:D9:08:60

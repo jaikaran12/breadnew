@@ -1,7 +1,7 @@
 import { billText } from '../billText';
 import { IconCheck, IconClock, IconHome, IconNext, IconShare } from '../icons';
 import { rupees } from '../money';
-import { shareText } from '../native';
+import { shareText } from '../device';
 import { actions, findBill, t, useAppState } from '../store';
 
 export function DoneScreen(props: { billKey: string }) {

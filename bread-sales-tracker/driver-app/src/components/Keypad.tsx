@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { IconBackspace } from '../icons';
 import { rupees } from '../money';
-import { vibrate } from '../native';
+import { vibrate } from '../device';
 import { t } from '../store';
 import type { Product } from '../types';
 import { Modal, ProductBadge } from './ui';

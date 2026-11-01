@@ -5,6 +5,8 @@ import { api } from '../api';
 import { Badge, BarChart, Card, DayPicker, Empty, ErrorBox, InlineBar, Loading, PageHeader, PaymentBadge, Stat } from '../components/ui';
 import { SaleModal } from '../components/SaleModal';
 import { ago, num, rupees, shortDate, time, todayIn } from '../format';
+import { useAuth } from '../auth';
+import { useIdle } from '../idle';
 import type { Summary } from '../types';
 
 interface Dashboard {
@@ -33,19 +35,24 @@ export function DashboardPage() {
   const [date, setDate] = useState(todayIn());
   const [openSale, setOpenSale] = useState<number | null>(null);
   const isToday = date === todayIn();
+  const idle = useIdle();
+  const { me } = useAuth();
   const q = useQuery({
     queryKey: ['dashboard', date],
     queryFn: () => api.get<Dashboard>('/dashboard', { date }),
-    refetchInterval: isToday ? 15_000 : false,
+    refetchInterval: isToday && !idle ? 15_000 : false,
   });
   const d = q.data;
+  const backupAgeDays = me?.lastBackupAt ? (Date.now() - Date.parse(me.lastBackupAt)) / 86_400_000 : null;
 
   return (
     <>
       <PageHeader
         title="Dashboard"
         subtitle={
-          isToday ? (
+          isToday && idle ? (
+            'Live updates paused while nobody is using the page — move the mouse or tap to resume'
+          ) : isToday ? (
             <span className="live">
               <span className="live-dot" /> Live — updates every 15 seconds
               {q.dataUpdatedAt ? ` · last update ${time(new Date(q.dataUpdatedAt).toISOString())}` : ''}
@@ -57,6 +64,19 @@ export function DashboardPage() {
         actions={<DayPicker value={date} onChange={setDate} />}
       />
       <ErrorBox error={q.error} />
+      {d && d.counts.stores > 0 && (backupAgeDays === null || backupAgeDays > 7) && (
+        <div className="alert alert-amber backup-reminder">
+          <span>
+            {backupAgeDays === null
+              ? 'You have not downloaded a backup of your data yet.'
+              : `Your last backup was ${Math.floor(backupAgeDays)} days ago.`}{' '}
+            Keep a copy safe (for example in Google Drive) — it takes a few seconds.
+          </span>
+          <Link className="btn btn-light btn-sm" to="/settings#backup">
+            Backup now
+          </Link>
+        </div>
+      )}
       {!d ? (
         <Loading />
       ) : (

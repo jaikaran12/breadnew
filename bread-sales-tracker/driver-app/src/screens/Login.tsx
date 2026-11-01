@@ -1,8 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { Modal } from '../components/ui';
-import { IconSettings } from '../icons';
 import { LANGS } from '../i18n';
-import { actions, APP_VERSION, errorText, isNativeApp, t, useAppState } from '../store';
+import { actions, APP_VERSION, errorText, t, useAppState } from '../store';
 
 export function LoginScreen() {
   const s = useAppState();
@@ -10,16 +8,11 @@ export function LoginScreen() {
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showServer, setShowServer] = useState(isNativeApp() && !s.serverUrl);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
     setError(null);
-    if (isNativeApp() && !s.serverUrl) {
-      setShowServer(true);
-      return;
-    }
     setBusy(true);
     try {
       await actions.login(phone, pin);
@@ -84,57 +77,10 @@ export function LoginScreen() {
           {busy ? t('loggingIn') : t('login')}
         </button>
       </form>
-      <button className="link-btn" onClick={() => setShowServer(true)}>
-        <IconSettings size={18} /> {t('serverSettings')}
-      </button>
       <div className="version">
         {t('version')} {APP_VERSION}
       </div>
-      <ServerDialog open={showServer} onClose={() => setShowServer(false)} />
     </div>
-  );
-}
-
-function ServerDialog(props: { open: boolean; onClose: () => void }) {
-  const s = useAppState();
-  const [url, setUrl] = useState(s.serverUrl);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<'ok' | 'fail' | null>(null);
-  const test = async () => {
-    setBusy(true);
-    setResult(null);
-    const ok = await actions.setServerUrl(url);
-    setResult(ok ? 'ok' : 'fail');
-    setBusy(false);
-    if (ok) setTimeout(props.onClose, 800);
-  };
-  return (
-    <Modal open={props.open} onClose={props.onClose} label={t('serverSettings')}>
-      <h2 className="dialog-title">{t('serverSettings')}</h2>
-      <label className="field">
-        <span>{t('serverAddress')}</span>
-        <input
-          type="url"
-          inputMode="url"
-          autoCapitalize="off"
-          autoCorrect="off"
-          value={url}
-          placeholder={isNativeApp() ? 'https://' : t('thisWebsite')}
-          onChange={(e) => setUrl(e.target.value)}
-        />
-      </label>
-      <p className="hint">{t('serverHelp')}</p>
-      {result === 'ok' && <div className="alert alert-green">{t('serverOk')}</div>}
-      {result === 'fail' && <div className="alert alert-red">{t('serverFail')}</div>}
-      <div className="dialog-actions">
-        <button className="btn btn-light" onClick={props.onClose}>
-          {t('cancel')}
-        </button>
-        <button className="btn btn-green" onClick={test} disabled={busy}>
-          {busy ? '…' : t('testAndSave')}
-        </button>
-      </div>
-    </Modal>
   );
 }
 

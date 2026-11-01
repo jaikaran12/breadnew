@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { IconBack } from '../icons';
-import { handleBack, pushBackHandler } from '../native';
+import { handleBack, pushBackHandler } from '../device';
 import { t, useAppState } from '../store';
 
 /** While `active`, the phone's Back button calls `fn` instead of leaving the screen. */

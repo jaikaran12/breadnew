@@ -1,9 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api';
+import { api, downloadUrl } from '../api';
 import { useAuth } from '../auth';
 import { Card, ErrorBox, Field, PageHeader, toast } from '../components/ui';
-import { ago } from '../format';
+import { ago, dateTime } from '../format';
 
 export function SettingsPage() {
   const { me } = useAuth();
@@ -11,7 +11,10 @@ export function SettingsPage() {
     <>
       <PageHeader title="Settings" />
       <div className="grid-2">
+        <BackupCard />
         <BusinessCard />
+      </div>
+      <div className="grid-2">
         <PasswordCard />
       </div>
       <div className="grid-2">
@@ -33,6 +36,39 @@ export function SettingsPage() {
         </Card>
       </div>
     </>
+  );
+}
+
+function BackupCard() {
+  const { me, refresh } = useAuth();
+  const ref = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (window.location.hash === '#backup') ref.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+  const started = () => {
+    // The file downloads in the background; refresh "last backup" once it has had time to finish.
+    setTimeout(() => void refresh(), 4000);
+    setTimeout(() => void refresh(), 15000);
+  };
+  return (
+    <section id="backup" ref={ref}>
+      <Card title="Backup of your data">
+        <p>
+          Downloads everything (shops, products, prices, drivers and all bills) as one file. Keep it somewhere
+          safe and private — for example your Google Drive — <b>at least once a week</b>.
+        </p>
+        <p className="muted small">
+          Last backup: {me?.lastBackupAt ? `${dateTime(me.lastBackupAt)} (${ago(me.lastBackupAt)})` : 'never'}
+        </p>
+        <a className="btn btn-primary" href={downloadUrl('/backup')} onClick={started}>
+          Download backup now
+        </a>
+        <p className="muted small">
+          To bring a backup back (for example on a new server), see “Backups” in the README. The file contains your
+          business data, so do not share it.
+        </p>
+      </Card>
+    </section>
   );
 }
 

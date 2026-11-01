@@ -1,0 +1,77 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The Android app is a thin wrapper around the driver web app (a "Trusted Web Activity"):
+// it opens appUrl full screen in Chrome, with the app's own icon and splash screen.
+// All screens and logic live in the web app, so web updates reach drivers without a new APK.
+//
+// Settings come from the environment (CI) or gradle.properties:
+//   APP_URL / appUrl                       https address of the driver web app
+//   VERSION_CODE, VERSION_NAME             app version (CI uses the build number)
+//   ANDROID_KEYSTORE_FILE, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD   release signing
+def envOr = { String name, String fallback -> System.getenv(name) ?: (project.findProperty(name) ?: fallback) }
+def appUrl = envOr('APP_URL', project.findProperty('appUrl') ?: '')
+def appUri = new URI(appUrl)
+if (appUri.scheme != 'https' || !appUri.host) {
+    throw new GradleException("appUrl must be an https:// address, got '${appUrl}'")
+}
+def hostName = appUri.host
+def appVersionCode = envOr('VERSION_CODE', '1') as Integer
+def appVersionName = envOr('VERSION_NAME', '1.0.0')
+def keystorePath = envOr('ANDROID_KEYSTORE_FILE', '')
+def hasReleaseKey = keystorePath && file(keystorePath).exists()
+
+android {
+    namespace 'com.breadsales.driver'
+    compileSdk 36
+
+    defaultConfig {
+        // Change before publishing on the Play Store (it can never change afterwards).
+        applicationId 'com.breadsales.driver'
+        minSdk 24
+        targetSdk 36
+        versionCode appVersionCode
+        versionName appVersionName
+
+        manifestPlaceholders = [hostName: hostName, launchUrl: appUrl]
+        // Digital Asset Links: the website says "this app may show me without a browser bar"
+        // (served by the server at /.well-known/assetlinks.json).
+        resValue 'string', 'asset_statements',
+            '[{ \\"relation\\": [\\"delegate_permission/common.handle_all_urls\\"], ' +
+            '\\"target\\": {\\"namespace\\": \\"web\\", \\"site\\": \\"https://' + hostName + '\\"}}]'
+    }
+
+    buildFeatures {
+        resValues = true
+    }
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            release {
+                storeFile file(keystorePath)
+                storePassword envOr('ANDROID_KEYSTORE_PASSWORD', '')
+                keyAlias envOr('ANDROID_KEY_ALIAS', 'breadsales')
+                keyPassword envOr('ANDROID_KEY_PASSWORD', envOr('ANDROID_KEYSTORE_PASSWORD', ''))
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (hasReleaseKey) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

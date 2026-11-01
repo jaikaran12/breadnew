@@ -5,6 +5,8 @@ A simple system for a bakery that sells bread to kirana shops from delivery auto
 * **Drivers** use an Android app with very big buttons (Hindi or English): choose the **area**, choose the
   **shop**, press **+ / −** for each product, and the app shows the **exact total**. They choose
   Cash / UPI / Udhaar and press **Save bill**. No more adding up in their heads.
+  The Android app is a thin wrapper around the driver **web app**, so every change to the website reaches
+  all phones at once — no new APK needed.
 * **You (the owner)** see every bill on a website **as soon as it is saved**. The website has a cash tally
   for each driver, reports, shops, products and prices, and drivers.
 
@@ -61,22 +63,24 @@ The website also works on a phone.
 ## How the pieces fit
 
 ```
- Driver phones (Android app)                     You (browser)
+ Driver phones: Android app = wrapper            You (browser)
+ that opens the driver web app in Chrome              │
         │  HTTPS, works offline + sync                │
         ▼                                             ▼
  ┌─────────────────────────── server ────────────────────────────┐
+ │  Driver web app (/driver/)        Admin website (/)           │
  │  Node.js API  (/api/driver/*, /api/admin/*)                   │
- │  Admin website (/)      Driver web app (/driver/, optional)   │
  └───────────────────────────────┬───────────────────────────────┘
                                  ▼
-                           PostgreSQL database (+ daily backups)
+                           PostgreSQL database
 ```
 
 | Folder | What is in it |
 | --- | --- |
 | `server/` | API server (Node.js 22, Express, PostgreSQL). Database tables in `server/migrations/`. Tests in `server/test/` |
 | `admin-web/` | Owner website (React) |
-| `driver-app/` | Driver app (React) and its Android project (`driver-app/android`, made with Capacitor) |
+| `driver-app/` | Driver web app (React, works offline), served at `/driver/` |
+| `android-wrapper/` | The Android app: a small wrapper (Trusted Web Activity) that opens the driver web app full screen in Chrome |
 | `Dockerfile`, `docker-compose.yml`, `Caddyfile`, `deploy/` | Production setup: one container with everything, PostgreSQL, automatic HTTPS, daily backups |
 | `../render.yaml` | One-click setup on Render.com. Render only reads it from the top of the repository |
 | `../.github/workflows/bread-sales.yml` | GitHub Actions: tests, and **builds the Android APK** for you. GitHub only reads workflows from the top-level `.github` folder |
@@ -86,10 +90,59 @@ The website also works on a phone.
 
 ## 1. Put the server online
 
-You need the server online before giving the app to drivers. Choose **A** (cheapest, your own small server)
-or **B** (no server to look after — the quickest way to get started).
+You need the server online before giving the app to drivers. **A** costs nothing and suits a business with
+low usage; **B** is for later if you want no waiting at all and full control.
 
-### A. Your own server (VPS) with Docker — recommended
+### A. Free hosting: Render + Neon (₹0 per month, no credit card)
+
+* **Neon** keeps the database (free, does not expire).
+* **Render** runs the website and the API for the app (free).
+* **GitHub Releases** hosts the Android app for drivers to download (free).
+
+**Step 1 — database (Neon, 3 minutes)**
+1. Go to **https://neon.com** → *Sign up* → *Continue with GitHub*.
+2. Create a project: name `bread-sales`, Postgres version **17**, region **AWS Asia Pacific (Singapore)**.
+3. Click **Connect** and copy the **connection string**. It looks like
+   `postgresql://neondb_owner:…@ep-….ap-southeast-1.aws.neon.tech/neondb?sslmode=require…`.
+   Keep it private: anyone with it can read your data.
+
+**Step 2 — website (Render, 10 minutes)**
+1. Open **https://render.com/deploy?repo=https://github.com/jaikaran12/breadnew** → *Sign in with GitHub*.
+2. Fill in:
+   * `DATABASE_URL` — the Neon connection string from step 1
+   * `ADMIN_PASSWORD` — your password for the website (at least 8 characters)
+   * `BUSINESS_NAME` — e.g. *Sunrise Bakery*
+
+   and click **Deploy Blueprint** / **Apply**.
+3. The first build takes 5–10 minutes. Then open the web service — the address looks like
+   `https://breadnew-sales.onrender.com` — and log in with username `owner` and your password.
+
+**What “free” means here**
+* The website **sleeps after 15 minutes without visits**; the next visit takes about a minute to wake it.
+  Drivers are not held up: bills are saved on the phone immediately and sent as soon as the server answers.
+* Neon free: about 0.5–1 GB of storage (years of bills for a small business) and 100 compute-hours a month.
+  The dashboard pauses its live refresh when nobody is using it, so the database can sleep at night.
+* Neon free keeps only a few hours of history, so **download a backup every week** (Settings → *Backup*;
+  the dashboard reminds you). See *Backups* below.
+* If you ever want no waiting, upgrade the Render web service to *Starter* (~$7/month); nothing else changes.
+
+Every push to GitHub that changes `bread-sales-tracker/` redeploys the website automatically.
+
+### Backups
+
+* **Download:** admin website → **Settings → Download backup now**. Keep the file (`bread-sales-backup-….json.gz`)
+  in Google Drive or similar. It contains all your business data — keep it private.
+* **Restore** (into a new, empty database — for example a new Neon project), on any computer with Node.js 22:
+  ```bash
+  cd bread-sales-tracker/server
+  npm install
+  DATABASE_URL="postgresql://…new database…" npm run restore -- ~/Downloads/bread-sales-backup-2026-01-31_0800.json.gz
+  ```
+  Then point `DATABASE_URL` on Render to the new database. Add `--replace` to overwrite a database that already
+  has data. On your own server (option B):
+  `docker compose cp backup.json.gz app:/tmp/b.json.gz && docker compose exec app node dist/scripts/restore-backup.js /tmp/b.json.gz --replace`
+
+### B. Your own server (VPS) with Docker — later, if you outgrow the free setup
 
 Cost: a VPS with **2 GB RAM** (DigitalOcean / Hetzner / AWS Lightsail / Hostinger, ~₹500–900 per month)
 and a domain name (~₹800 per year). An Indian region such as Mumbai or Bangalore is best.
@@ -127,26 +180,6 @@ Useful commands: `docker compose ps` (status), `docker compose logs -f app` (ser
 > Small VPS with 1 GB RAM? Building may run out of memory. Add swap first:
 > `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`
 
-### B. Render.com (no server to manage) — quickest
-
-1. Open **https://render.com/deploy?repo=https://github.com/jaikaran12/breadnew** and sign up / log in
-   (“Sign in with GitHub” is easiest).
-2. Render shows the Blueprint from `render.yaml` (a web service `breadnew-sales` and a database). Fill in:
-   * `ADMIN_PASSWORD` — your password for the website (at least 8 characters)
-   * `BUSINESS_NAME` — e.g. *Sunrise Bakery*
-
-   and click **Deploy Blueprint** / **Apply**.
-3. The first build takes about 5–10 minutes. Then open the web service in the Render dashboard; its address
-   looks like `https://breadnew-sales.onrender.com`. Log in with username `owner` and your password.
-4. **Plans:** the Blueprint starts on Render's **free** plans so you can try everything at no cost. Free
-   web services sleep after 15 idle minutes (the next visit takes about a minute), and **free databases
-   are deleted 30 days after creation**. Before drivers use it for real, upgrade in the Render dashboard:
-   the web service to **Starter** (~$7/month) and the database to **Basic** (~$6/month) — your data is kept.
-   Check Render's current prices.
-
-Every push to GitHub that changes `bread-sales-tracker/` redeploys automatically. Paid Render databases
-include backups (see the database's Recovery / Backups page in the Render dashboard).
-
 ---
 
 ## 2. Set up your business in the website (first day)
@@ -175,53 +208,58 @@ include backups (see the database's Recovery / Backups page in the Render dashbo
 
 ## 3. The Android app for drivers
 
-GitHub builds the app for you (no Android Studio needed).
+The Android app is a **wrapper**: it opens the driver web app (`https://<your website>/driver/`) full screen
+in Chrome, with its own icon and splash screen — no browser address bar. All screens and logic are in the
+web app, so changes reach every phone as soon as the website is updated; the APK almost never changes.
+It keeps working without internet (Chrome keeps the app on the phone) and bills are saved on the phone
+until they can be sent. GitHub builds the APK for you (no Android Studio needed).
 
 ### One-time setup
 
-1. **Server address built into the app:** set `VITE_API_BASE_URL` in `driver-app/.env.android`
-   (e.g. `VITE_API_BASE_URL=https://breadnew-sales.onrender.com`, must start with `https://`) and push.
-   You can also set a repository variable `API_BASE_URL` instead (**Settings → Secrets and variables →
-   Actions → Variables**); it wins over the file. Without either, the app asks for the address the first
-   time it opens (“Server settings” on the login screen).
-2. **Signing key** (so that app *updates* install over the old app). Create it once on any computer
-   with Java:
+1. **Website address:** `appUrl` in `android-wrapper/gradle.properties` (now
+   `https://breadnew-sales.onrender.com/driver/`). If your website has a different address, change that line
+   (or set a repository variable `APP_URL`) and build again.
+2. **Signing key** (so Chrome trusts the app and updates install over the old app). Create it once on any
+   computer with Java:
    ```bash
-   cd bread-sales-tracker/driver-app
-   sh scripts/create-android-keystore.sh
+   cd bread-sales-tracker/android-wrapper
+   sh scripts/create-keystore.sh
    ```
    and add two secrets under **Settings → Secrets and variables → Actions → Secrets**:
    `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` (`ANDROID_KEY_ALIAS` defaults to `breadsales`,
    `ANDROID_KEY_PASSWORD` to the keystore password). **Keep the `.jks` file and password safe and private.**
-   If you lose them, every driver must uninstall the app and install it again.
+3. **Tell the website about the key:** put the key's SHA-256 fingerprint in `ANDROID_CERT_SHA256`
+   (already set in `render.yaml` for the key created with this project; for a new key, get it with
+   `keytool -list -v -keystore bread-sales-release.jks`). The website then publishes
+   `/.well-known/assetlinks.json`, and Chrome shows the app without an address bar.
 
-   Without these secrets GitHub builds only a **TEST** APK (`…-TEST.apk`): it works, but every build has a
-   different signature, so updates cannot be installed over it. Use it only for trying out the app.
+   Without the signing secrets GitHub builds a **TEST** APK (`…-TEST.apk`): it works, but shows a small
+   address bar and can't be updated in place. Use it only for trying out.
 
 ### Getting the APK
 
 * **Release for drivers:** create a tag: `git tag bread-sales-v1.0.0 && git push --tags` (or ask Claude to do
-  it). GitHub builds the signed APK and publishes it under **Releases**. Drivers can always download the
-  newest version from one fixed link:
+  it). GitHub builds the signed APK and publishes it under **Releases**. Drivers always download the newest
+  version from one fixed link:
   **https://github.com/jaikaran12/breadnew/releases/latest/download/bread-sales.apk**
   (this link is also shown on the website's Drivers page via `APP_DOWNLOAD_URL`).
-* Every other push also builds an APK: open **Actions → Bread Sales → the run → Artifacts**.
+* Every other build also makes an APK: open **Actions → Bread Sales → the run → Artifacts**.
 
-### Installing on a driver's phone (Android 7 or newer)
+### Installing on a driver's phone (Android 7 or newer, with Chrome)
 
 1. Open the download link above on the phone (or send the `.apk` on WhatsApp) and tap the downloaded file.
    Chrome may warn that the file can be harmful — choose **Download anyway**.
 2. Android asks to allow **“Install unknown apps”** for WhatsApp/Chrome — allow it, then **Install**.
    If Play Protect shows a warning about an unknown app, choose **More details → Install anyway**.
 3. Open **Bread Sales**, choose हिंदी or English, enter the driver's mobile number and PIN.
+   (On the free plan the very first opening can take about a minute while the website wakes up.)
 4. The app downloads the shop list and prices. From then on it works even without internet.
 
-**Updating the app:** install the new APK over the old one. Saved bills and the login are kept, as long as
-the release signing key from step 2 is used. Check that no bills are waiting to be sent first (the home
-screen shows this).
+**Updates:** website changes reach the app automatically (the next time it is opened). A new APK is only
+needed if the wrapper itself changes; install it over the old one.
 
-**No Android app yet?** Drivers can use the same app in Chrome at `https://sales.mybakery.in/driver/`
-(menu → “Add to Home screen”). It also keeps working without internet once opened.
+**Without the APK:** drivers can open `https://<your website>/driver/` in Chrome → menu → **Add to Home
+screen**. It is the same app.
 
 ### Driver quick guide (हिंदी में — ड्राइवर को समझाने के लिए)
 
@@ -264,6 +302,8 @@ screen shows this).
 | `APP_TIMEZONE` | Asia/Kolkata | decides which day a bill belongs to |
 | `DRIVER_CANCEL_WINDOW_MINUTES` | 30 | how long a driver can cancel their own bill (0 = never) |
 | `APP_DOWNLOAD_URL` | — | link to the APK, shown on the Drivers page |
+| `ANDROID_APP_ID` | com.breadsales.driver | package name of the Android wrapper app |
+| `ANDROID_CERT_SHA256` | — | SHA-256 fingerprint(s) of the app's signing key, for `/.well-known/assetlinks.json` |
 | `COOKIE_SECURE` | true | set `false` only when testing without HTTPS |
 | `TRUST_PROXY` | 1 | number of proxies in front of the server (Caddy / Render) |
 | `LOGIN_RATE_LIMIT` | 30 | login attempts allowed per network per 15 minutes |
@@ -276,7 +316,8 @@ screen shows this).
 * Five wrong PINs lock that driver for 15 minutes, and logins per network are rate limited.
 * Turning a driver off, or changing their PIN, logs their phone out immediately. If a phone is lost, use
   **Drivers → Log out phone**.
-* The Android app only talks to `https://` servers and keeps its data out of phone backups.
+* The Android app only opens your own `https://` website; Chrome verifies that the app and the website belong
+  together (Digital Asset Links) before showing it full screen.
 * Keep `.env`, the signing key (`.jks`) and backups private. Never commit them to Git.
 
 ---
@@ -307,19 +348,16 @@ cd server && npm test             # API tests against a real PostgreSQL (TEST_DA
 cd driver-app && npm test         # bill total / merge logic
 ```
 
-Android app locally (needs Android Studio / Android SDK + JDK 21):
+Android wrapper locally (needs Android Studio or the Android SDK + JDK 21):
 
 ```bash
-cd driver-app
-cp .env.android.example .env.android     # set VITE_API_BASE_URL
-npm run build:android && npx cap sync android
-cd android && ./gradlew assembleDebug    # or open the android folder in Android Studio
+cd android-wrapper
+./gradlew assembleDebug                  # opens appUrl from gradle.properties; or APP_URL=https://… ./gradlew …
 ```
 
 Changing the app id (`com.breadsales.driver`, needed before publishing on the Play Store): edit
-`driver-app/capacitor.config.ts`, `android/app/build.gradle` (`namespace`, `applicationId`), the
-`MainActivity` package and `android/app/src/main/res/values/strings.xml`. App icons are generated by
-`node scripts/make-android-icons.cjs`.
+`android-wrapper/app/build.gradle` (`namespace`, `applicationId`) and `ANDROID_APP_ID` on the server.
+Icons are generated by `node android-wrapper/scripts/make-icons.cjs`.
 
 ### API overview
 

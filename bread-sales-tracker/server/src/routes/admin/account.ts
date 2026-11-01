@@ -15,6 +15,10 @@ import {
   verifySecret,
 } from '../../auth.js';
 import { getSettings, updateSettings } from '../../services/settings.js';
+import { writeBackup } from '../../services/backup.js';
+import { createGzip } from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
+import { PassThrough } from 'node:stream';
 import { idParam } from './helpers.js';
 
 const loginSchema = z.object({
@@ -89,9 +93,11 @@ export function adminAccountRouter(config: Config, pool: Pool): Router {
 
   router.get('/me', async (req, res) => {
     const settings = await getSettings(pool, config);
+    const backup = await one<{ value: string }>(pool, `SELECT value FROM app_settings WHERE key = 'last_backup_at'`);
     res.json({
       admin: req.admin,
       settings,
+      lastBackupAt: backup?.value ?? null,
       timezone: config.appTimezone,
       appDownloadUrl: config.appDownloadUrl ?? null,
       cancelWindowMinutes: config.driverCancelWindowMinutes,
@@ -117,6 +123,30 @@ export function adminAccountRouter(config: Config, pool: Pool): Router {
     // Other browsers are logged out; keep this one logged in.
     setAdminCookie(config, res, signAdminToken(config, req.admin!.id, updated!.tokenVersion));
     res.json({ ok: true });
+  });
+
+  /** Full copy of all data (gzipped JSON). Restore with: node dist/scripts/restore-backup.js <file> */
+  router.get('/backup', async (_req, res) => {
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', '_').replace(':', '');
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="bread-sales-backup-${stamp}.json.gz"`);
+    res.setHeader('Cache-Control', 'no-store');
+    const json = new PassThrough();
+    const done = pipeline(json, createGzip(), res);
+    try {
+      await writeBackup(pool, json);
+      json.end();
+      await done;
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES ('last_backup_at', $1, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [new Date().toISOString()],
+      );
+    } catch (err) {
+      console.error('Backup failed', err);
+      json.destroy(err as Error);
+      res.destroy();
+    }
   });
 
   router.get('/settings', async (_req, res) => {

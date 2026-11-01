@@ -85,6 +85,31 @@ export function createApp(config: Config, pool: Pool): Express {
     message: { error: 'Too many login attempts from this network. Please wait 15 minutes.', code: 'rate_limited' },
   });
 
+  // Digital Asset Links: tells Chrome that the Android wrapper app (signed with these keys) belongs to
+  // this website, so it can show the driver app full screen without a browser address bar.
+  app.get('/.well-known/assetlinks.json', (_req, res) => {
+    if (config.androidCertFingerprints.length === 0) {
+      res.status(404).json({ error: 'ANDROID_CERT_SHA256 is not set' });
+      return;
+    }
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.json([
+      {
+        relation: ['delegate_permission/common.handle_all_urls'],
+        target: {
+          namespace: 'android_app',
+          package_name: config.androidAppId,
+          sha256_cert_fingerprints: config.androidCertFingerprints,
+        },
+      },
+    ]);
+  });
+
+  // For hosting health checks: answers without touching the database, so the free database can sleep.
+  app.get('/api/ping', (_req, res) => {
+    res.json({ ok: true });
+  });
+
   app.get('/api/health', async (_req, res) => {
     try {
       await pool.query('SELECT 1');

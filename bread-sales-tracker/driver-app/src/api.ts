@@ -66,11 +66,6 @@ async function request<T>(method: string, path: string, body?: unknown, timeoutM
 }
 
 export const api = {
-  health: (url: string) =>
-    fetch(`${url.replace(/\/+$/, '')}/api/health`, { cache: 'no-store' }).then((r) => {
-      if (!r.ok) throw new Error(String(r.status));
-      return r.json() as Promise<{ ok: boolean }>;
-    }),
   login: (phone: string, pin: string) => request<{ token: string; driver: Driver }>('POST', '/api/driver/login', { phone, pin }),
   catalog: () => request<Catalog>('GET', '/api/driver/catalog'),
   createSale: (sale: {

@@ -3,7 +3,7 @@ import { Keypad } from '../components/Keypad';
 import { Confirm, ProductBadge, TopBar } from '../components/ui';
 import { IconMinus, IconNext, IconPlus, IconTrash } from '../icons';
 import { rupees } from '../money';
-import { vibrate } from '../native';
+import { vibrate } from '../device';
 import { actions, draftLines, linesTotal, t, useAppState } from '../store';
 import type { Product } from '../types';
 

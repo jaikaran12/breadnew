@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Bread Sales</string>
-    <string name="title_activity_main">Bread Sales</string>
-    <string name="package_name">com.breadsales.driver</string>
-    <string name="custom_url_scheme">com.breadsales.driver</string>
-</resources>

@@ -2,26 +2,19 @@
   "name": "bread-sales-driver-app",
   "version": "1.0.0",
   "private": true,
-  "description": "Driver app: make bills at kirana shops, works offline, sends bills to the office",
+  "description": "Driver app (web app / PWA): make bills at kirana shops, works offline, sends bills to the office",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:android": "tsc --noEmit && vite build --mode android",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "cap:sync": "cap sync android"
+    "test": "vitest run"
   },
   "dependencies": {
-    "@capacitor/android": "^8.6.0",
-    "@capacitor/app": "^8.1.2",
-    "@capacitor/core": "^8.6.0",
-    "@capacitor/share": "^8.0.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.6.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

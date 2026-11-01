@@ -6,6 +6,7 @@ import { SaleModal } from '../components/SaleModal';
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, Pager, PaymentBadge, RangePicker } from '../components/ui';
 import { dateTime, num, rupees, shortDate, time, todayIn } from '../format';
 import { useAreas, useDrivers } from '../lookups';
+import { useIdle } from '../idle';
 import type { Sale, Summary } from '../types';
 
 interface SalesResponse {
@@ -36,6 +37,7 @@ export function SalesPage() {
   const [openSale, setOpenSale] = useState<number | null>(null);
   const drivers = useDrivers();
   const areas = useAreas();
+  const idle = useIdle();
 
   const set = (patch: Partial<Record<keyof typeof filters, string | number>>) => {
     const next = new URLSearchParams(params);
@@ -64,7 +66,7 @@ export function SalesPage() {
   const q = useQuery({
     queryKey: ['sales', query, filters.page],
     queryFn: () => api.get<SalesResponse>('/sales', { ...query, page: filters.page, pageSize: 50 }),
-    refetchInterval: filters.to === today ? 30_000 : false,
+    refetchInterval: filters.to === today && !idle ? 30_000 : false,
   });
   const multiDay = filters.from !== filters.to;
   const s = q.data?.summary;

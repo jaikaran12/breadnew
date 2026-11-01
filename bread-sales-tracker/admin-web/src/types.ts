@@ -18,6 +18,7 @@ export interface Me {
   timezone: string;
   appDownloadUrl: string | null;
   cancelWindowMinutes: number;
+  lastBackupAt: string | null;
 }
 
 export interface Area {

@@ -24,6 +24,9 @@ export interface Config {
   /** Login attempts allowed per IP per 15 minutes (brute-force protection). */
   loginRateLimit: number;
   logRequests: boolean;
+  /** Android wrapper app: package name + SHA-256 signing certificate fingerprints (for assetlinks.json). */
+  androidAppId: string;
+  androidCertFingerprints: string[];
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -94,5 +97,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     defaultBusinessName: env.BUSINESS_NAME?.trim() || 'My Bakery',
     loginRateLimit: int(env.LOGIN_RATE_LIMIT, 30, 'LOGIN_RATE_LIMIT'),
     logRequests: bool(env.LOG_REQUESTS, nodeEnv !== 'test'),
+    androidAppId: env.ANDROID_APP_ID?.trim() || 'com.breadsales.driver',
+    androidCertFingerprints: (env.ANDROID_CERT_SHA256 ?? '')
+      .split(/[\s,]+/)
+      .map((f) => f.trim().toUpperCase())
+      .filter((f) => /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(f)),
   };
 }

@@ -5,7 +5,7 @@ import { Confirm, TopBar } from '../components/ui';
 import { IconAlert, IconCheck, IconClock, IconShare, IconX } from '../icons';
 import { dateText, timeText } from '../dates';
 import { rupees } from '../money';
-import { shareText } from '../native';
+import { shareText } from '../device';
 import { actions, findBill, t, timezone, useAppState } from '../store';
 
 export function BillDetailScreen(props: { billKey: string }) {

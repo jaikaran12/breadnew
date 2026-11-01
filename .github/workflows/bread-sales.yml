@@ -1,11 +1,10 @@
 # Bread Sales: tests + builds for everything in bread-sales-tracker/
-# - Every push: server tests (PostgreSQL), web builds, Docker image build, Android APK (downloadable from the run page).
-# - Push a tag like "bread-sales-v1.0.0": also publishes the APK as a GitHub Release. Drivers can always get the
-#   newest app from https://github.com/<owner>/<repo>/releases/latest/download/bread-sales.apk
-#
-# Server address built into the app: driver-app/.env.android (VITE_API_BASE_URL), or the repository
-# variable API_BASE_URL if you set one (Settings > Secrets and variables > Actions > Variables).
-# Signing key (Settings > Secrets and variables > Actions > Secrets), see bread-sales-tracker/README.md:
+# - server tests (PostgreSQL), web app builds, Docker image, and the Android app.
+# - The Android app is a thin wrapper that opens the driver web app (bread-sales-tracker/android-wrapper).
+#   Its web address is appUrl in android-wrapper/gradle.properties, or the repository variable APP_URL.
+# - Push a tag like "bread-sales-v1.0.0" (or run this workflow on such a tag): publishes the APK as a GitHub
+#   Release. Drivers always get the newest app from .../releases/latest/download/bread-sales.apk
+# Signing key secrets (Settings > Secrets and variables > Actions > Secrets), see bread-sales-tracker/README.md:
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD   (ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD optional)
 name: Bread Sales
 
@@ -97,40 +96,24 @@ jobs:
         run: docker build -t bread-sales:ci bread-sales-tracker
 
   android:
-    name: Android APK
+    name: Android app (wrapper)
     runs-on: ubuntu-latest
     permissions:
       contents: write
     defaults:
       run:
-        working-directory: bread-sales-tracker/driver-app
+        working-directory: bread-sales-tracker/android-wrapper
     env:
       VERSION_CODE: ${{ github.run_number }}
       VERSION_NAME: 1.0.${{ github.run_number }}
-      APP_VERSION: 1.0.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: bread-sales-tracker/driver-app/package-lock.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
           cache: gradle
-          cache-dependency-path: bread-sales-tracker/driver-app/android/**/*.gradle*
-      - run: npm ci
-      - name: Build the app screens
-        env:
-          API_BASE_URL: ${{ vars.API_BASE_URL }}
-        run: |
-          if [ -n "$API_BASE_URL" ]; then export VITE_API_BASE_URL="$API_BASE_URL"; fi
-          echo "Server address built into the app: ${VITE_API_BASE_URL:-$(sed -n 's/^VITE_API_BASE_URL=//p' .env.android 2>/dev/null)}"
-          npm run build:android
-      - name: Copy screens into the Android project
-        run: npx cap sync android
+          cache-dependency-path: bread-sales-tracker/android-wrapper/**/*.gradle*
       - name: Prepare signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -144,21 +127,20 @@ jobs:
             echo "::error::A release needs the signing key. Add the ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD secrets (see README)."
             exit 1
           else
-            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret - building a TEST (debug) APK. Set up a release key before giving the app to drivers (see README)."
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret - building a TEST (debug) APK. Set up the release key before giving the app to drivers (see README)."
           fi
       - name: Build APK
-        working-directory: bread-sales-tracker/driver-app/android
         env:
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          APP_URL_VAR: ${{ vars.APP_URL }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          if [ -n "$APP_URL_VAR" ]; then export APP_URL="$APP_URL_VAR"; fi
+          echo "The app opens: ${APP_URL:-$(sed -n 's/^appUrl=//p' gradle.properties)}"
           chmod +x gradlew
           mkdir -p "$GITHUB_WORKSPACE/apk"
           if [ -n "${ANDROID_KEYSTORE_FILE:-}" ]; then
-            export ANDROID_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD"
-            export ANDROID_KEY_ALIAS="${KEY_ALIAS:-breadsales}"
-            export ANDROID_KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
             ./gradlew --no-daemon assembleRelease
             cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/apk/bread-sales-$VERSION_NAME.apk"
           else
@@ -187,8 +169,8 @@ jobs:
           body: |
             **Bread Sales driver app ${{ env.VERSION_NAME }}**
 
-            Install on the driver's phone (Android 7 or newer): open this link on the phone, download, and tap Install
-            (allow "Install unknown apps" for Chrome or WhatsApp when asked):
+            Install on the driver's phone (Android 7 or newer, with Chrome): open this link on the phone,
+            download, and tap Install (allow "Install unknown apps" for Chrome or WhatsApp when asked):
             https://github.com/${{ github.repository }}/releases/latest/download/bread-sales.apk
 
-            Updating: install the new APK over the old one. Bills already saved on the phone are kept.
+            The app opens the driver web app, so updates to the website reach drivers without a new APK.

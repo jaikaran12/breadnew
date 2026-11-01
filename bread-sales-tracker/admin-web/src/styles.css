@@ -777,7 +777,7 @@ textarea:focus {
 
 .form-2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -796,6 +796,13 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+.field > input,
+.field > select,
+.field > textarea {
+  width: 100%;
+  min-width: 0;
 }
 
 .field-label {
@@ -1228,4 +1235,12 @@ textarea:focus {
   .page {
     padding: 0;
   }
+}
+
+.backup-reminder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }

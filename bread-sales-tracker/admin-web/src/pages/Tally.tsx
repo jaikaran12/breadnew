@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { Badge, Card, DayPicker, Empty, ErrorBox, Loading, PageHeader, Stat, toast } from '../components/ui';
 import { dateTime, paiseToInput, parseRupees, rupees, time, todayIn } from '../format';
+import { useIdle } from '../idle';
 
 interface TallyRow {
   driverId: number;
@@ -46,10 +47,11 @@ interface TallyResponse {
 
 export function TallyPage() {
   const [date, setDate] = useState(todayIn());
+  const idle = useIdle();
   const q = useQuery({
     queryKey: ['tally', date],
     queryFn: () => api.get<TallyResponse>('/tally', { date }),
-    refetchInterval: date === todayIn() ? 30_000 : false,
+    refetchInterval: date === todayIn() && !idle ? 30_000 : false,
   });
   const t = q.data?.totals;
 
