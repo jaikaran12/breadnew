@@ -15,6 +15,7 @@ import { openSqliteDb } from '../db-sqlite.js';
 import { hashSecret } from '../auth.js';
 import { migrate } from '../migrate.js';
 import { backupToSql, buildBackup } from '../services/backup.js';
+import { lineDiscount, type DiscountRule } from '../services/billMath.js';
 import { ensureInitialAdmin } from '../services/bootstrap.js';
 import { updateSettings } from '../services/settings.js';
 import { addDays, todayInZone } from '../util/dates.js';
@@ -110,6 +111,22 @@ async function addDemoData(db: Db, timeZone: string) {
     'SELECT id, name, price_paise AS price FROM products ORDER BY sort_order',
   );
   const stores = await db.all<{ id: number; areaId: number }>('SELECT id, area_id AS "areaId" FROM stores');
+
+  // Special rates: every 6th shop gets 5% off everything, every 9th shop ₹2 off each of the first three breads.
+  const discounts = new Map<string, DiscountRule>();
+  stores.forEach((store, i) => {
+    if (i % 6 === 0) for (const p of products) discounts.set(`${store.id}:${p.id}`, { kind: 'percent', value: 500 });
+    else if (i % 9 === 4) for (const p of products.slice(0, 3)) discounts.set(`${store.id}:${p.id}`, { kind: 'amount', value: 200 });
+  });
+  await db.batch(
+    [...discounts.entries()].map(([key, rule]) => {
+      const [storeId, productId] = key.split(':').map(Number);
+      return {
+        sql: 'INSERT INTO store_discounts (store_id, product_id, kind, value) VALUES (?1, ?2, ?3, ?4)',
+        params: [storeId, productId, rule.kind, rule.value],
+      };
+    }),
+  );
   const drivers = await db.all<{ id: number }>('SELECT id FROM drivers ORDER BY id');
   const areaIds = [...new Set(stores.map((s) => s.areaId))].sort((a, b) => a - b);
   const today = todayInZone(timeZone);
@@ -132,9 +149,27 @@ async function addDemoData(db: Db, timeZone: string) {
           const qty = 1 + Math.floor(rand() * (p.price < 2000 ? 12 : 6));
           chosen.set(p.id, { ...p, qty });
         }
-        const lines = [...chosen.values()];
-        const total = lines.reduce((acc, l) => acc + l.qty * l.price, 0);
+        // About 1 visit in 25 only replaces expired bread; about 1 in 6 bills also takes some back.
+        const returnsOnly = rand() < 0.04;
+        const lines = returnsOnly
+          ? []
+          : [...chosen.values()].map((l) => {
+              const rule = discounts.get(`${store.id}:${l.id}`) ?? null;
+              const discount = lineDiscount(rule, l.price, l.qty);
+              return { ...l, rule, discount, total: l.qty * l.price - discount };
+            });
+        const returned = new Map<number, { id: number; name: string; price: number; qty: number }>();
+        if (returnsOnly || rand() < 0.17) {
+          const count = 1 + Math.floor(rand() * 2);
+          for (let k = 0; k < count; k++) {
+            const p = products[Math.floor(Math.pow(rand(), 1.4) * products.length)];
+            returned.set(p.id, { ...p, qty: 1 + Math.floor(rand() * 3) });
+          }
+        }
+        const total = lines.reduce((acc, l) => acc + l.total, 0);
         const qty = lines.reduce((acc, l) => acc + l.qty, 0);
+        const discountTotal = lines.reduce((acc, l) => acc + l.discount, 0);
+        const returnedQty = [...returned.values()].reduce((acc, r) => acc + r.qty, 0);
         const r = rand();
         const mode = r < 0.72 ? 'cash' : r < 0.92 ? 'upi' : 'credit';
         const hh = String(Math.floor(minute / 60)).padStart(2, '0');
@@ -143,15 +178,23 @@ async function addDemoData(db: Db, timeZone: string) {
         const clientId = crypto.randomUUID();
         sales.push({
           sql: `INSERT INTO sales (client_id, driver_id, store_id, area_id, sold_at, sale_date, payment_mode,
-                                   total_paise, total_quantity, device_sold_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?5)`,
-          params: [clientId, driver.id, store.id, store.areaId, soldAt, date, mode, total, qty],
+                                   total_paise, total_quantity, discount_paise, returned_quantity, device_sold_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?5)`,
+          params: [clientId, driver.id, store.id, store.areaId, soldAt, date, mode, total, qty, discountTotal, returnedQty],
         });
         for (const l of lines) {
           sales.push({
-            sql: `INSERT INTO sale_items (sale_id, product_id, product_name, unit_price_paise, list_price_paise, quantity, line_total_paise)
-                  VALUES ((SELECT id FROM sales WHERE client_id = ?1), ?2, ?3, ?4, ?4, ?5, ?6)`,
-            params: [clientId, l.id, l.name, l.price, l.qty, l.qty * l.price],
+            sql: `INSERT INTO sale_items (sale_id, product_id, product_name, unit_price_paise, list_price_paise, quantity,
+                                          discount_kind, discount_value, discount_paise, list_discount_paise, line_total_paise)
+                  VALUES ((SELECT id FROM sales WHERE client_id = ?1), ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?8, ?9)`,
+            params: [clientId, l.id, l.name, l.price, l.qty, l.rule?.kind ?? null, l.rule?.value ?? null, l.discount, l.total],
+          });
+        }
+        for (const ret of returned.values()) {
+          sales.push({
+            sql: `INSERT INTO sale_returns (sale_id, product_id, product_name, quantity, unit_price_paise)
+                  VALUES ((SELECT id FROM sales WHERE client_id = ?1), ?2, ?3, ?4, ?5)`,
+            params: [clientId, ret.id, ret.name, ret.qty, ret.price],
           });
         }
       }
@@ -159,7 +202,9 @@ async function addDemoData(db: Db, timeZone: string) {
   }
   await db.batch(sales);
   const bills = sales.filter((s) => s.sql.includes('INTO sales')).length;
-  console.log(`Demo data ready: ${PRODUCTS.length} products, ${stores.length} shops in ${areaIds.length} areas, ${drivers.length} drivers, ${bills} bills.`);
+  console.log(
+    `Demo data ready: ${PRODUCTS.length} products, ${stores.length} shops in ${areaIds.length} areas (${discounts.size} shop discounts), ${drivers.length} drivers, ${bills} bills.`,
+  );
   console.log('Driver app login: phone 9000000001 (or …02, …03, …04), PIN 1234');
 }
 

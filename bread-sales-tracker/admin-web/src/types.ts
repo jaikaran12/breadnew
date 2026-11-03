@@ -46,6 +46,19 @@ export interface Store {
   lastSaleAt?: string | null;
   bills30?: number;
   amount30Paise?: number;
+  /** Number of products with a special rate at this shop. */
+  discountCount?: number;
+}
+
+/** A shop's special rate on one product: percent (hundredths of a percent: 500 = 5%) or paise off each unit. */
+export interface DiscountRule {
+  kind: 'percent' | 'amount';
+  value: number;
+}
+
+export interface StoreDiscount extends DiscountRule {
+  productId: number;
+  updatedAt?: string;
 }
 
 export interface Product {
@@ -79,7 +92,22 @@ export interface SaleItem {
   unitPricePaise: number;
   listPricePaise: number;
   quantity: number;
+  discountKind: DiscountRule['kind'] | null;
+  discountValue: number | null;
+  discountPaise: number;
+  /** Discount the shop's current rule on the server would have given (to spot an old discount list). */
+  listDiscountPaise: number;
+  /** What the shop pays for this line (quantity × rate − discount). */
   lineTotalPaise: number;
+}
+
+/** Expired units taken back and replaced (no money). */
+export interface SaleReturn {
+  productId: number;
+  productName: string;
+  quantity: number;
+  /** List price of one unit when the bill arrived. */
+  unitPricePaise: number;
 }
 
 export interface Sale {
@@ -96,6 +124,8 @@ export interface Sale {
   paymentMode: PaymentMode;
   totalPaise: number;
   totalQuantity: number;
+  discountPaise: number;
+  returnedQuantity: number;
   status: 'completed' | 'cancelled';
   cancelledAt: string | null;
   cancelledBy: 'driver' | 'admin' | null;
@@ -103,6 +133,7 @@ export interface Sale {
   createdAt: string;
   priceMismatch: boolean;
   items: SaleItem[];
+  returns: SaleReturn[];
 }
 
 export interface Summary {
@@ -112,6 +143,8 @@ export interface Summary {
   upiPaise: number;
   creditPaise: number;
   quantity: number;
+  discountPaise: number;
+  returnedQuantity: number;
   cancelledBills: number;
   cancelledPaise?: number;
 }

@@ -1,5 +1,5 @@
 import { billText } from '../billText';
-import { IconCheck, IconClock, IconHome, IconNext, IconShare } from '../icons';
+import { IconCheck, IconClock, IconHome, IconNext, IconReturn, IconShare } from '../icons';
 import { rupees } from '../money';
 import { shareText } from '../device';
 import { actions, findBill, t, useAppState } from '../store';
@@ -23,13 +23,19 @@ export function DoneScreen(props: { billKey: string }) {
         <div className="done-check">
           <IconCheck size={72} />
         </div>
-        <h1 className="done-title">{t('billSaved')}</h1>
+        <h1 className="done-title">{bill && bill.items.length === 0 ? t('returnsSaved') : t('billSaved')}</h1>
         {bill && (
           <>
             <div className="done-amount" data-testid="done-total">
               {rupees(bill.totalPaise)}
             </div>
             <div className="done-shop">{bill.storeName}</div>
+            {bill.returns.length > 0 && (
+              <div className="done-returns" data-testid="done-returns">
+                <IconReturn size={20} /> {t('returnedPcs', { n: bill.returns.reduce((acc, r) => acc + r.quantity, 0) })} ·{' '}
+                {t('noCharge')}
+              </div>
+            )}
             {bill.state === 'sent' ? (
               <div className="status status-ok">
                 <IconCheck size={22} /> {t('sentToOffice')}

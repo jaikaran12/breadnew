@@ -167,6 +167,13 @@ export function SalesPage() {
             <div className="stat-label">Udhaar</div>
             <div className="stat-value">{rupees(s.creditPaise)}</div>
           </div>
+          {(s.discountPaise > 0 || s.returnedQuantity > 0) && (
+            <div className="stat stat-green">
+              <div className="stat-label">Discount given</div>
+              <div className="stat-value">{rupees(s.discountPaise)}</div>
+              <div className="stat-hint">↩ {num(s.returnedQuantity)} expired taken back</div>
+            </div>
+          )}
           <div className="stat stat-red">
             <div className="stat-label">Cancelled</div>
             <div className="stat-value">{num(s.cancelledBills)}</div>
@@ -208,9 +215,13 @@ export function SalesPage() {
                       {sale.storeName}
                       <div className="muted small">{sale.areaName}</div>
                     </td>
-                    <td className="num">{num(sale.totalQuantity)}</td>
+                    <td className="num">
+                      {num(sale.totalQuantity)}
+                      {sale.returnedQuantity > 0 && <div className="small warn">↩ {num(sale.returnedQuantity)}</div>}
+                    </td>
                     <td>
-                      <PaymentBadge mode={sale.paymentMode} />{' '}
+                      {sale.totalQuantity > 0 ? <PaymentBadge mode={sale.paymentMode} /> : <Badge tone="amber">returns only</Badge>}{' '}
+                      {sale.discountPaise > 0 && <Badge tone="green">−{rupees(sale.discountPaise)}</Badge>}{' '}
                       {sale.status === 'cancelled' && (
                         <Badge tone="red" title={`${sale.cancelReason ?? ''} ${dateTime(sale.cancelledAt)}`}>
                           Cancelled{sale.cancelledBy === 'driver' ? ' by driver' : ''}

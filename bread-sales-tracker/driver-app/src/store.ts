@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { api, ApiError, configureApi, isTemporaryFailure, NetworkError } from './api';
+import { lineDiscount, type DiscountRule } from './billMath';
 import { dateIn } from './dates';
 import { translate, type MessageKey } from './i18n';
 import { load, save } from './storage';
@@ -13,6 +14,7 @@ import type {
   Lang,
   PaymentMode,
   PendingSale,
+  ReturnLine,
   Screen,
   ServerSale,
   Store,
@@ -195,8 +197,14 @@ function linesFromServer(sale: ServerSale): BillLine[] {
     name: i.productName,
     unitPricePaise: i.unitPricePaise,
     quantity: i.quantity,
+    discount: i.discountKind && i.discountValue ? { kind: i.discountKind, value: i.discountValue } : null,
+    discountPaise: i.discountPaise ?? 0,
     lineTotalPaise: i.lineTotalPaise,
   }));
+}
+
+function returnsFromServer(sale: ServerSale): ReturnLine[] {
+  return (sale.returns ?? []).map((r) => ({ productId: r.productId, name: r.productName, quantity: r.quantity }));
 }
 
 /** All bills of a day for the logged-in driver: sent ones from the server plus ones still on the phone. */
@@ -218,6 +226,7 @@ export function billsForDate(s: State, date: string): BillView[] {
       totalPaise: o.totalPaise,
       totalQuantity: o.totalQuantity,
       items: o.items,
+      returns: o.returns ?? [],
       state: o.rejected ? 'rejected' : 'pending',
       error: o.lastError,
     }));
@@ -233,6 +242,7 @@ export function billsForDate(s: State, date: string): BillView[] {
     totalPaise: x.totalPaise,
     totalQuantity: x.totalQuantity,
     items: linesFromServer(x),
+    returns: returnsFromServer(x),
     state: x.status === 'cancelled' ? 'cancelled' : 'sent',
     cancelledBy: x.cancelledBy,
   }));
@@ -249,21 +259,25 @@ export function findBill(s: State, key: string): BillView | undefined {
 }
 
 export interface Totals {
+  /** Bills with something sold (a visit that only replaced expired bread is not counted). */
   bills: number;
   totalPaise: number;
   cashPaise: number;
   upiPaise: number;
   creditPaise: number;
   quantity: number;
+  /** Expired units taken back. */
+  returned: number;
 }
 
 export function summarize(bills: BillView[]): Totals {
-  const t: Totals = { bills: 0, totalPaise: 0, cashPaise: 0, upiPaise: 0, creditPaise: 0, quantity: 0 };
+  const t: Totals = { bills: 0, totalPaise: 0, cashPaise: 0, upiPaise: 0, creditPaise: 0, quantity: 0, returned: 0 };
   for (const b of bills) {
     if (b.state === 'cancelled') continue;
-    t.bills++;
+    if (b.totalQuantity > 0) t.bills++;
     t.totalPaise += b.totalPaise;
     t.quantity += b.totalQuantity;
+    t.returned += b.returns.reduce((acc, r) => acc + r.quantity, 0);
     if (b.paymentMode === 'cash') t.cashPaise += b.totalPaise;
     if (b.paymentMode === 'upi') t.upiPaise += b.totalPaise;
     if (b.paymentMode === 'credit') t.creditPaise += b.totalPaise;
@@ -296,21 +310,48 @@ export function myPendingCount(s: State): { waiting: number; rejected: number; o
 
 // ---------- draft (bill being made) ----------
 
+/** The shop's special rate on a product, from the downloaded discount list (null = normal price). */
+export function discountFor(s: State, storeId: number, productId: number): DiscountRule | null {
+  const d = s.catalog?.discounts?.find((x) => x.storeId === storeId && x.productId === productId);
+  return d ? { kind: d.kind, value: d.value } : null;
+}
+
+/** One bill line: quantity × rate minus the shop's discount (exact paise, same arithmetic as the server). */
+export function makeLine(productId: number, name: string, unitPricePaise: number, quantity: number, discount: DiscountRule | null): BillLine {
+  const discountPaise = lineDiscount(discount, unitPricePaise, quantity);
+  return { productId, name, unitPricePaise, quantity, discount, discountPaise, lineTotalPaise: unitPricePaise * quantity - discountPaise };
+}
+
 export function draftLines(s: State): BillLine[] {
   if (!s.draft || !s.catalog) return [];
   const lines: BillLine[] = [];
   for (const p of s.catalog.products) {
     const q = s.draft.qty[p.id] ?? 0;
-    if (q > 0) lines.push({ productId: p.id, name: p.name, unitPricePaise: p.pricePaise, quantity: q, lineTotalPaise: q * p.pricePaise });
+    if (q > 0) lines.push(makeLine(p.id, p.name, p.pricePaise, q, discountFor(s, s.draft.storeId, p.id)));
   }
   return lines;
 }
 
-export function linesTotal(lines: BillLine[]): { totalPaise: number; quantity: number } {
+/** Expired items taken back in the bill being made. */
+export function draftReturns(s: State): ReturnLine[] {
+  if (!s.draft || !s.catalog) return [];
+  const ret = s.draft.ret ?? {};
+  return s.catalog.products.filter((p) => (ret[p.id] ?? 0) > 0).map((p) => ({ productId: p.id, name: p.name, quantity: ret[p.id] }));
+}
+
+export function linesTotal(lines: BillLine[]): { totalPaise: number; quantity: number; discountPaise: number } {
   return lines.reduce(
-    (acc, l) => ({ totalPaise: acc.totalPaise + l.lineTotalPaise, quantity: acc.quantity + l.quantity }),
-    { totalPaise: 0, quantity: 0 },
+    (acc, l) => ({
+      totalPaise: acc.totalPaise + l.lineTotalPaise,
+      quantity: acc.quantity + l.quantity,
+      discountPaise: acc.discountPaise + (l.discountPaise ?? 0),
+    }),
+    { totalPaise: 0, quantity: 0, discountPaise: 0 },
   );
+}
+
+export function returnsCount(returns: ReturnLine[]): number {
+  return returns.reduce((acc, r) => acc + r.quantity, 0);
 }
 
 // ---------- background work ----------
@@ -363,7 +404,13 @@ export function syncNow(): Promise<void> {
           storeId: sale.storeId,
           soldAt: sale.soldAt,
           paymentMode: sale.paymentMode,
-          items: sale.items.map((i) => ({ productId: i.productId, quantity: i.quantity, unitPricePaise: i.unitPricePaise })),
+          items: sale.items.map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            unitPricePaise: i.unitPricePaise,
+            ...(i.discount ? { discount: i.discount } : {}),
+          })),
+          returns: (sale.returns ?? []).map((r) => ({ productId: r.productId, quantity: r.quantity })),
           totalPaise: sale.totalPaise,
         });
         setState((s) => ({
@@ -496,20 +543,36 @@ export const actions = {
     const d = state.draft;
     if (d && d.storeId === store.id) return; // continue the unfinished bill
     setState({
-      draft: { storeId: store.id, storeName: store.name, areaId: store.areaId, areaName, qty: {}, paymentMode: 'cash' },
+      draft: {
+        storeId: store.id,
+        storeName: store.name,
+        areaId: store.areaId,
+        areaName,
+        qty: {},
+        ret: {},
+        mode: 'sale',
+        paymentMode: 'cash',
+      },
       lastAreaId: store.areaId,
     });
   },
-  setQty(productId: number, qty: number) {
+  /** Sale quantity, or (in return mode) expired units taken back. */
+  setQty(productId: number, qty: number, mode: 'sale' | 'return' = state.draft?.mode ?? 'sale') {
     if (!state.draft) return;
     const clean = Math.max(0, Math.min(9999, Math.floor(qty) || 0));
-    const next = { ...state.draft.qty };
+    const key = mode === 'return' ? 'ret' : 'qty';
+    const next = { ...(state.draft[key] ?? {}) };
     if (clean === 0) delete next[productId];
     else next[productId] = clean;
-    setState({ draft: { ...state.draft, qty: next } });
+    setState({ draft: { ...state.draft, [key]: next } });
   },
+  setMode(mode: 'sale' | 'return') {
+    if (state.draft && state.draft.mode !== mode) setState({ draft: { ...state.draft, mode } });
+  },
+  /** Clears the counts of the current mode (sold items, or returns). */
   clearQty() {
-    if (state.draft) setState({ draft: { ...state.draft, qty: {} } });
+    if (!state.draft) return;
+    setState({ draft: state.draft.mode === 'return' ? { ...state.draft, ret: {} } : { ...state.draft, qty: {} } });
   },
   setPaymentMode(mode: PaymentMode) {
     if (state.draft) setState({ draft: { ...state.draft, paymentMode: mode } });
@@ -523,7 +586,8 @@ export const actions = {
     const { draft, auth } = state;
     if (!draft || !auth) return null;
     const lines = draftLines(state);
-    if (lines.length === 0) return null;
+    const returns = draftReturns(state);
+    if (lines.length === 0 && returns.length === 0) return null;
     const { totalPaise, quantity } = linesTotal(lines);
     const now = new Date();
     const sale: PendingSale = {
@@ -537,6 +601,7 @@ export const actions = {
       saleDate: dateIn(timezone(), now),
       paymentMode: draft.paymentMode,
       items: lines,
+      returns,
       totalPaise,
       totalQuantity: quantity,
       attempts: 0,

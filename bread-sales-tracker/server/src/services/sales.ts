@@ -3,11 +3,20 @@ import { isUniqueViolation, nowIso, type Db, type Statement } from '../db.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import type { PaymentMode } from '../types.js';
 import { dateInZone } from '../util/dates.js';
+import { lineDiscount, MAX_LINE_PAISE, type DiscountRule } from './billMath.js';
 
 export interface SaleItemInput {
   productId: number;
   quantity: number;
   unitPricePaise: number;
+  /** The shop's discount the phone applied to this line (from its copy of the discount list). */
+  discount?: DiscountRule | null;
+}
+
+/** Expired units taken back and replaced with fresh ones (no money). */
+export interface ReturnInput {
+  productId: number;
+  quantity: number;
 }
 
 export interface SaleInput {
@@ -16,6 +25,7 @@ export interface SaleInput {
   soldAt?: string;
   paymentMode: PaymentMode;
   items: SaleItemInput[];
+  returns?: ReturnInput[];
   /** Total shown on the phone. Must match the server's own calculation exactly. */
   totalPaise: number;
 }
@@ -26,7 +36,19 @@ export interface SaleItem {
   unitPricePaise: number;
   listPricePaise: number;
   quantity: number;
+  discountKind: DiscountRule['kind'] | null;
+  discountValue: number | null;
+  discountPaise: number;
+  listDiscountPaise: number;
+  /** What the shop pays for this line (quantity × rate − discount). */
   lineTotalPaise: number;
+}
+
+export interface SaleReturn {
+  productId: number;
+  productName: string;
+  quantity: number;
+  unitPricePaise: number;
 }
 
 export interface Sale {
@@ -41,19 +63,25 @@ export interface Sale {
   soldAt: string;
   saleDate: string;
   paymentMode: PaymentMode;
+  /** What the shop pays (after discounts). */
   totalPaise: number;
+  /** Units sold. */
   totalQuantity: number;
+  discountPaise: number;
+  /** Expired units taken back and replaced. */
+  returnedQuantity: number;
   status: 'completed' | 'cancelled';
   cancelledAt: string | null;
   cancelledBy: 'driver' | 'admin' | null;
   cancelReason: string | null;
   createdAt: string;
-  /** True if any line was charged at a price different from the price list when the bill arrived. */
+  /** True if any line used a rate or discount different from the lists on the server when the bill arrived. */
   priceMismatch: boolean;
   items: SaleItem[];
+  returns: SaleReturn[];
 }
 
-export type SaleRow = Omit<Sale, 'items' | 'priceMismatch'>;
+export type SaleRow = Omit<Sale, 'items' | 'returns' | 'priceMismatch'>;
 
 const MAX_FUTURE_MS = 10 * 60 * 1000;
 const MAX_PAST_MS = 7 * 24 * 60 * 60 * 1000;
@@ -62,7 +90,8 @@ export const SALE_SELECT = `
   SELECT s.id, s.client_id AS "clientId", s.driver_id AS "driverId", d.name AS "driverName",
          s.store_id AS "storeId", st.name AS "storeName", s.area_id AS "areaId", a.name AS "areaName",
          s.sold_at AS "soldAt", s.sale_date AS "saleDate", s.payment_mode AS "paymentMode",
-         s.total_paise AS "totalPaise", s.total_quantity AS "totalQuantity", s.status,
+         s.total_paise AS "totalPaise", s.total_quantity AS "totalQuantity", s.discount_paise AS "discountPaise",
+         s.returned_quantity AS "returnedQuantity", s.status,
          s.cancelled_at AS "cancelledAt", s.cancelled_by AS "cancelledBy", s.cancel_reason AS "cancelReason",
          s.created_at AS "createdAt"
     FROM sales s
@@ -70,28 +99,51 @@ export const SALE_SELECT = `
     JOIN stores st ON st.id = s.store_id
     JOIN areas a ON a.id = s.area_id`;
 
-/** Loads the line items for the given sales and attaches them. Keeps the input order. */
+/** Loads the bill lines and returned items for the given sales and attaches them. Keeps the input order. */
 export async function attachItems(db: Db, sales: SaleRow[]): Promise<Sale[]> {
   if (sales.length === 0) return [];
-  const items = await db.all<SaleItem & { saleId: number }>(
-    `SELECT si.sale_id AS "saleId", si.product_id AS "productId", si.product_name AS "productName",
-            si.unit_price_paise AS "unitPricePaise", si.list_price_paise AS "listPricePaise",
-            si.quantity, si.line_total_paise AS "lineTotalPaise"
-       FROM sale_items si
-       LEFT JOIN products p ON p.id = si.product_id
-      WHERE si.sale_id IN (SELECT value FROM json_each(?1))
-      ORDER BY p.sort_order NULLS LAST, si.product_name`,
-    [JSON.stringify(sales.map((s) => s.id))],
-  );
-  const bySale = new Map<number, SaleItem[]>();
-  for (const { saleId, ...item } of items) {
-    const list = bySale.get(saleId) ?? [];
-    list.push(item);
-    bySale.set(saleId, list);
-  }
+  const ids = JSON.stringify(sales.map((s) => s.id));
+  const [items, returns] = await Promise.all([
+    db.all<SaleItem & { saleId: number }>(
+      `SELECT si.sale_id AS "saleId", si.product_id AS "productId", si.product_name AS "productName",
+              si.unit_price_paise AS "unitPricePaise", si.list_price_paise AS "listPricePaise", si.quantity,
+              si.discount_kind AS "discountKind", si.discount_value AS "discountValue", si.discount_paise AS "discountPaise",
+              si.list_discount_paise AS "listDiscountPaise", si.line_total_paise AS "lineTotalPaise"
+         FROM sale_items si
+         LEFT JOIN products p ON p.id = si.product_id
+        WHERE si.sale_id IN (SELECT value FROM json_each(?1))
+        ORDER BY p.sort_order NULLS LAST, si.product_name`,
+      [ids],
+    ),
+    db.all<SaleReturn & { saleId: number }>(
+      `SELECT r.sale_id AS "saleId", r.product_id AS "productId", r.product_name AS "productName", r.quantity,
+              r.unit_price_paise AS "unitPricePaise"
+         FROM sale_returns r
+         LEFT JOIN products p ON p.id = r.product_id
+        WHERE r.sale_id IN (SELECT value FROM json_each(?1))
+        ORDER BY p.sort_order NULLS LAST, r.product_name`,
+      [ids],
+    ),
+  ]);
+  const group = <T extends { saleId: number }>(rows: T[]) => {
+    const map = new Map<number, Array<Omit<T, 'saleId'>>>();
+    for (const { saleId, ...row } of rows) {
+      const list = map.get(saleId) ?? [];
+      list.push(row);
+      map.set(saleId, list);
+    }
+    return map;
+  };
+  const itemsBySale = group(items);
+  const returnsBySale = group(returns);
   return sales.map((s) => {
-    const saleItems = bySale.get(s.id) ?? [];
-    return { ...s, priceMismatch: saleItems.some((i) => i.unitPricePaise !== i.listPricePaise), items: saleItems };
+    const saleItems = (itemsBySale.get(s.id) ?? []) as SaleItem[];
+    return {
+      ...s,
+      priceMismatch: saleItems.some((i) => i.unitPricePaise !== i.listPricePaise || i.discountPaise !== i.listDiscountPaise),
+      items: saleItems,
+      returns: (returnsBySale.get(s.id) ?? []) as SaleReturn[],
+    };
   });
 }
 
@@ -122,7 +174,8 @@ async function existingFor(db: Db, clientId: string, driverId: number): Promise<
 
 /**
  * Saves a bill sent by a driver's phone.
- * - Totals are recalculated here from quantity × rate in whole paise and must match the phone.
+ * - Totals are recalculated here from quantity × rate − the shop's discount, in whole paise, and must match the phone.
+ * - Expired items taken back (returns) are saved with the bill; they cost the shop nothing.
  * - Sending the same bill twice (same clientId) returns the first copy instead of a duplicate.
  */
 export async function createSale(
@@ -134,32 +187,66 @@ export async function createSale(
   const already = await existingFor(db, input.clientId, driverId);
   if (already) return { sale: already, created: false };
 
-  if (input.items.length === 0) throw badRequest('The bill has no items');
+  const returns = input.returns ?? [];
+  if (input.items.length === 0 && returns.length === 0) throw badRequest('The bill has no items');
   const productIds = input.items.map((i) => i.productId);
   if (new Set(productIds).size !== productIds.length) throw badRequest('The same product appears twice in the bill');
+  const returnIds = returns.map((r) => r.productId);
+  if (new Set(returnIds).size !== returnIds.length) throw badRequest('The same product appears twice in the returns');
 
   const store = await db.first<{ id: number; areaId: number }>('SELECT id, area_id AS "areaId" FROM stores WHERE id = ?1', [
     input.storeId,
   ]);
   if (!store) throw badRequest('Shop not found. Refresh the shop list and try again.');
 
-  const products = await db.all<{ id: number; name: string; pricePaise: number }>(
-    'SELECT id, name, price_paise AS "pricePaise" FROM products WHERE id IN (SELECT value FROM json_each(?1))',
-    [JSON.stringify(productIds)],
+  // Products with their price and this shop's current discount (one query).
+  const allIds = [...new Set([...productIds, ...returnIds])];
+  const products = await db.all<{
+    id: number;
+    name: string;
+    pricePaise: number;
+    discountKind: DiscountRule['kind'] | null;
+    discountValue: number | null;
+  }>(
+    `SELECT p.id, p.name, p.price_paise AS "pricePaise", d.kind AS "discountKind", d.value AS "discountValue"
+       FROM products p LEFT JOIN store_discounts d ON d.product_id = p.id AND d.store_id = ?2
+      WHERE p.id IN (SELECT value FROM json_each(?1))`,
+    [JSON.stringify(allIds), store.id],
   );
   const productById = new Map(products.map((p) => [p.id, p]));
-  const missing = productIds.filter((id) => !productById.has(id));
+  const missing = allIds.filter((id) => !productById.has(id));
   if (missing.length > 0) throw badRequest(`Unknown product id(s): ${missing.join(', ')}`);
 
   let totalPaise = 0;
   let totalQuantity = 0;
+  let discountPaise = 0;
   const lines = input.items.map((item) => {
     const product = productById.get(item.productId)!;
-    const lineTotalPaise = item.quantity * item.unitPricePaise;
-    totalPaise += lineTotalPaise;
+    const gross = item.quantity * item.unitPricePaise;
+    if (gross > MAX_LINE_PAISE) throw badRequest('A bill line is too large');
+    const rule = item.discount ?? null;
+    const discount = lineDiscount(rule, item.unitPricePaise, item.quantity);
+    const shopRule: DiscountRule | null =
+      product.discountKind && product.discountValue ? { kind: product.discountKind, value: product.discountValue } : null;
+    const listDiscount = lineDiscount(shopRule, product.pricePaise, item.quantity);
+    totalPaise += gross - discount;
     totalQuantity += item.quantity;
-    return { ...item, productName: product.name, listPricePaise: product.pricePaise, lineTotalPaise };
+    discountPaise += discount;
+    return {
+      ...item,
+      rule,
+      productName: product.name,
+      listPricePaise: product.pricePaise,
+      discountPaise: discount,
+      listDiscountPaise: listDiscount,
+      lineTotalPaise: gross - discount,
+    };
   });
+  const returnLines = returns.map((r) => {
+    const product = productById.get(r.productId)!;
+    return { ...r, productName: product.name, unitPricePaise: product.pricePaise };
+  });
+  const returnedQuantity = returnLines.reduce((acc, r) => acc + r.quantity, 0);
   if (!Number.isSafeInteger(totalPaise)) throw badRequest('Bill total is too large');
   if (totalPaise !== input.totalPaise) {
     throw badRequest('Bill total does not match the items. Please make the bill again.', {
@@ -169,12 +256,13 @@ export async function createSale(
 
   const soldAt = resolveSoldAt(input.soldAt, Date.now());
   const deviceSoldAt = input.soldAt && Number.isFinite(Date.parse(input.soldAt)) ? new Date(input.soldAt).toISOString() : null;
-  // Two statements in one transaction: the bill, then all its lines (sent as one JSON value).
+  const saleId = '(SELECT id FROM sales WHERE client_id = ?1)';
+  // One statement for the bill, one for all its lines and one for the returns (lines go as one JSON value).
   const statements: Statement[] = [
     {
       sql: `INSERT INTO sales (client_id, driver_id, store_id, area_id, sold_at, sale_date, payment_mode,
-                               total_paise, total_quantity, device_sold_at, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+                               total_paise, total_quantity, discount_paise, returned_quantity, device_sold_at, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
       params: [
         input.clientId,
         driverId,
@@ -185,25 +273,53 @@ export async function createSale(
         input.paymentMode,
         totalPaise,
         totalQuantity,
+        discountPaise,
+        returnedQuantity,
         deviceSoldAt,
         nowIso(),
       ],
     },
-    {
-      sql: `INSERT INTO sale_items (sale_id, product_id, product_name, unit_price_paise, list_price_paise,
-                                    quantity, line_total_paise)
-            SELECT (SELECT id FROM sales WHERE client_id = ?1), json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]'),
-                   json_extract(j.value, '$[2]'), json_extract(j.value, '$[3]'), json_extract(j.value, '$[4]'),
-                   json_extract(j.value, '$[5]')
+  ];
+  if (lines.length > 0) {
+    statements.push({
+      sql: `INSERT INTO sale_items (sale_id, product_id, product_name, unit_price_paise, list_price_paise, quantity,
+                                    discount_kind, discount_value, discount_paise, list_discount_paise, line_total_paise)
+            SELECT ${saleId}, json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]'), json_extract(j.value, '$[2]'),
+                   json_extract(j.value, '$[3]'), json_extract(j.value, '$[4]'), json_extract(j.value, '$[5]'),
+                   json_extract(j.value, '$[6]'), json_extract(j.value, '$[7]'), json_extract(j.value, '$[8]'),
+                   json_extract(j.value, '$[9]')
               FROM json_each(?2) j`,
       params: [
         input.clientId,
         JSON.stringify(
-          lines.map((l) => [l.productId, l.productName, l.unitPricePaise, l.listPricePaise, l.quantity, l.lineTotalPaise]),
+          lines.map((l) => [
+            l.productId,
+            l.productName,
+            l.unitPricePaise,
+            l.listPricePaise,
+            l.quantity,
+            l.rule?.kind ?? null,
+            l.rule?.value ?? null,
+            l.discountPaise,
+            l.listDiscountPaise,
+            l.lineTotalPaise,
+          ]),
         ),
       ],
-    },
-  ];
+    });
+  }
+  if (returnLines.length > 0) {
+    statements.push({
+      sql: `INSERT INTO sale_returns (sale_id, product_id, product_name, quantity, unit_price_paise)
+            SELECT ${saleId}, json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]'), json_extract(j.value, '$[2]'),
+                   json_extract(j.value, '$[3]')
+              FROM json_each(?2) j`,
+      params: [
+        input.clientId,
+        JSON.stringify(returnLines.map((r) => [r.productId, r.productName, r.quantity, r.unitPricePaise])),
+      ],
+    });
+  }
   try {
     await db.batch(statements);
   } catch (err) {
@@ -279,20 +395,25 @@ export async function restoreSale(db: Db, saleId: number): Promise<Sale> {
 }
 
 export interface DaySummary {
+  /** Bills with something sold (visits where only expired bread was replaced are not counted here). */
   bills: number;
   totalPaise: number;
   cashPaise: number;
   upiPaise: number;
   creditPaise: number;
   quantity: number;
+  discountPaise: number;
+  returnedQuantity: number;
   cancelledBills: number;
 }
 
 export const SUMMARY_COLUMNS = `
-  count(*) FILTER (WHERE status = 'completed') AS bills,
+  count(*) FILTER (WHERE status = 'completed' AND total_quantity > 0) AS bills,
   coalesce(sum(total_paise) FILTER (WHERE status = 'completed'), 0) AS "totalPaise",
   coalesce(sum(total_paise) FILTER (WHERE status = 'completed' AND payment_mode = 'cash'), 0) AS "cashPaise",
   coalesce(sum(total_paise) FILTER (WHERE status = 'completed' AND payment_mode = 'upi'), 0) AS "upiPaise",
   coalesce(sum(total_paise) FILTER (WHERE status = 'completed' AND payment_mode = 'credit'), 0) AS "creditPaise",
   coalesce(sum(total_quantity) FILTER (WHERE status = 'completed'), 0) AS quantity,
+  coalesce(sum(discount_paise) FILTER (WHERE status = 'completed'), 0) AS "discountPaise",
+  coalesce(sum(returned_quantity) FILTER (WHERE status = 'completed'), 0) AS "returnedQuantity",
   count(*) FILTER (WHERE status = 'cancelled') AS "cancelledBills"`;

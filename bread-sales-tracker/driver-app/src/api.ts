@@ -1,3 +1,4 @@
+import type { DiscountRule } from './billMath';
 import type { Catalog, Driver, PaymentMode, ServerSale, Store } from './types';
 
 /** The server answered with an error (wrong PIN, validation problem, ...). */
@@ -74,7 +75,8 @@ export const api = {
     storeId: number;
     soldAt: string;
     paymentMode: PaymentMode;
-    items: Array<{ productId: number; quantity: number; unitPricePaise: number }>;
+    items: Array<{ productId: number; quantity: number; unitPricePaise: number; discount?: DiscountRule }>;
+    returns: Array<{ productId: number; quantity: number }>;
     totalPaise: number;
   }) => request<{ sale: ServerSale; created: boolean; catalogVersion: string }>('POST', '/api/driver/sales', sale),
   sales: (date: string) =>

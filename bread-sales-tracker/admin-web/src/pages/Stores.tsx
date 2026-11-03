@@ -150,7 +150,12 @@ export function StoresPage() {
                   {list.data.stores.map((s) => (
                     <tr key={s.id} onClick={() => navigate(`/stores/${s.id}`)} className={s.isActive ? '' : 'row-cancelled'}>
                       <td>
-                        <strong>{s.name}</strong>
+                        <strong>{s.name}</strong>{' '}
+                        {s.discountCount ? (
+                          <Badge tone="green" title={`${s.discountCount} product(s) at a special rate`}>
+                            discount
+                          </Badge>
+                        ) : null}
                         <div className="muted small">{[s.ownerName, s.address].filter(Boolean).join(' · ')}</div>
                       </td>
                       <td>{s.areaName}</td>

@@ -1,13 +1,22 @@
 import { useEffect, useState } from 'react';
-import { IconBackspace } from '../icons';
+import { lineDiscount, type DiscountRule } from '../billMath';
+import { IconBackspace, IconReturn } from '../icons';
 import { rupees } from '../money';
 import { vibrate } from '../device';
 import { t } from '../store';
 import type { Product } from '../types';
+import { discountText } from './Bill';
 import { Modal, ProductBadge } from './ui';
 
-/** Calculator-style number pad to type a quantity directly (e.g. 24 loaves). */
-export function Keypad(props: { product: Product | null; value: number; onDone: (qty: number) => void; onClose: () => void }) {
+/** Calculator-style number pad to type a quantity directly (e.g. 24 loaves), or a number of expired items taken back. */
+export function Keypad(props: {
+  product: Product | null;
+  value: number;
+  mode?: 'sale' | 'return';
+  discount?: DiscountRule | null;
+  onDone: (qty: number) => void;
+  onClose: () => void;
+}) {
   const [text, setText] = useState('');
   useEffect(() => {
     setText(props.value > 0 ? String(props.value) : '');
@@ -25,17 +34,25 @@ export function Keypad(props: { product: Product | null; value: number; onDone: 
 
   const qty = Number(text || '0');
   const p = props.product;
+  const returning = props.mode === 'return';
+  const off = p ? lineDiscount(props.discount, p.pricePaise, qty) : 0;
   return (
     <Modal open={Boolean(p)} onClose={props.onClose} sheet label={p?.name}>
       {p && (
-        <div className="keypad">
+        <div className={`keypad ${returning ? 'keypad-return' : ''}`}>
+          {returning && (
+            <div className="keypad-mode">
+              <IconReturn size={20} /> {t('returnTab')}
+            </div>
+          )}
           <div className="keypad-head">
             <ProductBadge name={p.name} color={p.color} />
             <div>
               <div className="keypad-name">{p.name}</div>
               <div className="keypad-price">
                 {p.localName ? `${p.localName} · ` : ''}
-                {rupees(p.pricePaise)}
+                {returning ? t('noCharge') : rupees(p.pricePaise)}
+                {!returning && props.discount ? ` · ${discountText(props.discount)}` : ''}
               </div>
             </div>
           </div>
@@ -43,7 +60,19 @@ export function Keypad(props: { product: Product | null; value: number; onDone: 
             {text || '0'}
           </div>
           <div className="keypad-calc">
-            {qty} × {rupees(p.pricePaise)} = <strong>{rupees(qty * p.pricePaise)}</strong>
+            {returning ? (
+              <>
+                <IconReturn size={18} /> {t('returnedN', { n: qty })} · <strong>{t('noCharge')}</strong>
+              </>
+            ) : off > 0 ? (
+              <>
+                {qty} × {rupees(p.pricePaise)} − {rupees(off)} = <strong>{rupees(qty * p.pricePaise - off)}</strong>
+              </>
+            ) : (
+              <>
+                {qty} × {rupees(p.pricePaise)} = <strong>{rupees(qty * p.pricePaise)}</strong>
+              </>
+            )}
           </div>
           <div className="keypad-grid">
             {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => (

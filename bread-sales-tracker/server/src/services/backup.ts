@@ -12,8 +12,10 @@ export const BACKUP_TABLES = [
   'stores',
   'products',
   'product_price_history',
+  'store_discounts',
   'sales',
   'sale_items',
+  'sale_returns',
   'settlements',
 ] as const;
 export type BackupTable = (typeof BACKUP_TABLES)[number];

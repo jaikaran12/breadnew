@@ -116,7 +116,7 @@ export function storesRouter(config: Config, db: Db): Router {
     }[f.sort];
     const rows = await db.all(
       `WITH recent AS (
-              SELECT store_id, count(*) AS bills30, sum(total_paise) AS amount30
+              SELECT store_id, count(*) FILTER (WHERE total_quantity > 0) AS bills30, sum(total_paise) AS amount30
                 FROM sales WHERE sale_date >= ${since} AND status = 'completed' GROUP BY store_id
             ),
             st AS (
@@ -125,7 +125,8 @@ export function storesRouter(config: Config, db: Db): Router {
                 FROM stores x
             )
        SELECT ${STORE_COLUMNS}, st.last_sale_at AS "lastSaleAt",
-              coalesce(r.bills30, 0) AS "bills30", coalesce(r.amount30, 0) AS "amount30Paise"
+              coalesce(r.bills30, 0) AS "bills30", coalesce(r.amount30, 0) AS "amount30Paise",
+              (SELECT count(*) FROM store_discounts sd WHERE sd.store_id = st.id) AS "discountCount"
          FROM st JOIN areas a ON a.id = st.area_id
          LEFT JOIN drivers d ON d.id = st.created_by_driver_id
          LEFT JOIN recent r ON r.store_id = st.id
@@ -143,12 +144,15 @@ export function storesRouter(config: Config, db: Db): Router {
     const store = await getStore(id);
     if (!store) throw notFound('Shop not found');
     const since = addDays(today, -29);
-    const [stats, products30, recentRows] = await Promise.all([
+    const [stats, products30, returns30, discounts, recentRows] = await Promise.all([
       db.first(
-        `SELECT count(*) AS "billsAllTime", coalesce(sum(total_paise), 0) AS "amountAllTimePaise",
-                count(*) FILTER (WHERE sale_date >= ?2) AS "bills30",
+        `SELECT count(*) FILTER (WHERE total_quantity > 0) AS "billsAllTime",
+                coalesce(sum(total_paise), 0) AS "amountAllTimePaise",
+                count(*) FILTER (WHERE sale_date >= ?2 AND total_quantity > 0) AS "bills30",
                 coalesce(sum(total_paise) FILTER (WHERE sale_date >= ?2), 0) AS "amount30Paise",
                 coalesce(sum(total_paise) FILTER (WHERE sale_date >= ?2 AND payment_mode = 'credit'), 0) AS "credit30Paise",
+                coalesce(sum(discount_paise) FILTER (WHERE sale_date >= ?2), 0) AS "discount30Paise",
+                coalesce(sum(returned_quantity) FILTER (WHERE sale_date >= ?2), 0) AS "returned30",
                 min(sold_at) AS "firstSaleAt", max(sold_at) AS "lastSaleAt"
            FROM sales WHERE store_id = ?1 AND status = 'completed'`,
         [id, since],
@@ -160,9 +164,24 @@ export function storesRouter(config: Config, db: Db): Router {
           GROUP BY si.product_id ORDER BY p.sort_order, p.name`,
         [id, since],
       ),
+      db.all(
+        `SELECT r.product_id AS "productId", p.name, sum(r.quantity) AS quantity,
+                sum(r.quantity * r.unit_price_paise) AS "valuePaise"
+           FROM sale_returns r JOIN sales s ON s.id = r.sale_id JOIN products p ON p.id = r.product_id
+          WHERE s.store_id = ?1 AND s.status = 'completed' AND s.sale_date >= ?2
+          GROUP BY r.product_id ORDER BY p.sort_order, p.name`,
+        [id, since],
+      ),
+      db.all(
+        `SELECT d.product_id AS "productId", p.name, p.price_paise AS "pricePaise", p.is_active AS "isProductActive",
+                d.kind, d.value, d.updated_at AS "updatedAt"
+           FROM store_discounts d JOIN products p ON p.id = d.product_id
+          WHERE d.store_id = ?1 ORDER BY p.sort_order, lower(p.name)`,
+        [id],
+      ),
       db.all<SaleRow>(`${SALE_SELECT} WHERE s.store_id = ?1 ORDER BY s.sold_at DESC LIMIT 30`, [id]),
     ]);
-    res.json({ store, stats, products30, since, recentSales: await attachItems(db, recentRows) });
+    res.json({ store, stats, products30, returns30, discounts, since, recentSales: await attachItems(db, recentRows) });
   });
 
   router.post('/', async (req, res) => {

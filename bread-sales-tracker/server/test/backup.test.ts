@@ -80,7 +80,7 @@ describe('backup and restore', () => {
     // What the website does: info, then every table in id ranges, then "done".
     const info = (await s.admin.get('/api/admin/backup/info').expect(200)).body;
     expect(info.format).toBe('bread-sales-backup');
-    expect(info.migration).toBe('0001_init.sql');
+    expect(info.migration).toBe('0002_discounts_returns.sql');
     expect(info.lastIds.sales).toBe(3);
     expect(info.lastIds.sale_items).toBe(6);
     const tables: Record<string, Row[]> = {};

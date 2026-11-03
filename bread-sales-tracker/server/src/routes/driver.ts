@@ -33,23 +33,37 @@ const loginSchema = z.object({
   pin: z.string().trim().regex(/^\d{4,6}$/, 'PIN must be 4 to 6 digits'),
 });
 
-const saleSchema = z.object({
-  clientId: z.uuid(),
-  storeId: z.number().int().positive(),
-  soldAt: z.string().max(40).optional(),
-  paymentMode: z.enum(['cash', 'upi', 'credit']),
-  items: z
-    .array(
-      z.object({
-        productId: z.number().int().positive(),
-        quantity: z.number().int().min(1).max(100_000),
-        unitPricePaise: z.number().int().min(0).max(10_000_000),
-      }),
-    )
-    .min(1, 'The bill has no items')
-    .max(200),
-  totalPaise: z.number().int().min(0),
-});
+const discountSchema = z.discriminatedUnion('kind', [
+  // hundredths of a percent: 500 = 5%
+  z.object({ kind: z.literal('percent'), value: z.number().int().min(1).max(10_000) }),
+  // paise off each unit
+  z.object({ kind: z.literal('amount'), value: z.number().int().min(1).max(10_000_000) }),
+]);
+
+const saleSchema = z
+  .object({
+    clientId: z.uuid(),
+    storeId: z.number().int().positive(),
+    soldAt: z.string().max(40).optional(),
+    paymentMode: z.enum(['cash', 'upi', 'credit']),
+    items: z
+      .array(
+        z.object({
+          productId: z.number().int().positive(),
+          quantity: z.number().int().min(1).max(100_000),
+          unitPricePaise: z.number().int().min(0).max(10_000_000),
+          discount: discountSchema.nullable().optional(),
+        }),
+      )
+      .max(200),
+    // Expired items taken back and replaced with fresh ones (no money). Older app versions do not send this.
+    returns: z
+      .array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(100_000) }))
+      .max(200)
+      .optional(),
+    totalPaise: z.number().int().min(0),
+  })
+  .refine((b) => b.items.length + (b.returns?.length ?? 0) > 0, { message: 'The bill has no items', path: ['items'] });
 
 const newStoreSchema = z.object({
   areaId: z.number().int().positive(),

@@ -16,12 +16,15 @@ interface Dashboard {
   byDriver: Array<Summary & { driverId: number; name: string; storesVisited: number; lastSaleAt: string | null }>;
   byArea: Array<{ areaId: number; name: string; bills: number; totalPaise: number; storesVisited: number; totalStores: number }>;
   byProduct: Array<{ productId: number; name: string; color: string; quantity: number; totalPaise: number }>;
+  returnsByProduct: Array<{ productId: number; name: string; color: string; quantity: number; valuePaise: number; stores: number }>;
   recent: Array<{
     id: number;
     soldAt: string;
     paymentMode: string;
     totalPaise: number;
     totalQuantity: number;
+    returnedQuantity: number;
+    discountPaise: number;
     status: string;
     driverName: string;
     storeName: string;
@@ -94,6 +97,14 @@ export function DashboardPage() {
             <Stat label="Cash" tone="green" value={rupees(d.totals.cashPaise)} hint="to be handed over" />
             <Stat label="UPI" tone="blue" value={rupees(d.totals.upiPaise)} hint="paid to your account" />
             <Stat label="Udhaar (credit)" tone="amber" value={rupees(d.totals.creditPaise)} hint={d.totals.cancelledBills ? `${d.totals.cancelledBills} cancelled bill(s)` : 'given to shops'} />
+            {(d.totals.discountPaise > 0 || d.totals.returnedQuantity > 0) && (
+              <Stat
+                label="Discount given"
+                tone="green"
+                value={rupees(d.totals.discountPaise)}
+                hint={`↩ ${num(d.totals.returnedQuantity)} expired taken back`}
+              />
+            )}
           </div>
 
           <div className="grid-2">
@@ -223,6 +234,39 @@ export function DashboardPage() {
             </Card>
           </div>
 
+          {d.returnsByProduct.length > 0 && (
+            <Card
+              title={`Expired taken back — ${num(d.returnsByProduct.reduce((a, r) => a + r.quantity, 0))} pcs (replaced, no charge)`}
+              actions={<Link to="/reports">Reports →</Link>}
+              flush
+            >
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Product</th>
+                      <th className="num">Units</th>
+                      <th className="num">Shops</th>
+                      <th className="num">Worth (list price)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.returnsByProduct.map((r) => (
+                      <tr key={r.productId}>
+                        <td>
+                          <span className="swatch" style={{ background: r.color }} /> {r.name}
+                        </td>
+                        <td className="num strong">{num(r.quantity)}</td>
+                        <td className="num">{num(r.stores)}</td>
+                        <td className="num">{rupees(r.valuePaise)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
           <Card title="Latest bills" actions={<Link to={`/sales?from=${date}&to=${date}`}>All bills →</Link>} flush>
             {d.recent.length === 0 ? (
               <Empty>No bills yet. They appear here as soon as drivers save them.</Empty>
@@ -250,7 +294,9 @@ export function DashboardPage() {
                           <div className="muted small">{s.areaName}</div>
                         </td>
                         <td>
-                          <PaymentBadge mode={s.paymentMode} /> {s.status === 'cancelled' && <Badge tone="red">Cancelled</Badge>}
+                          {s.totalQuantity > 0 ? <PaymentBadge mode={s.paymentMode} /> : <Badge tone="amber">returns only</Badge>}{' '}
+                          {s.returnedQuantity > 0 && s.totalQuantity > 0 && <Badge tone="amber">↩ {s.returnedQuantity}</Badge>}{' '}
+                          {s.status === 'cancelled' && <Badge tone="red">Cancelled</Badge>}
                         </td>
                         <td className="num strong">{rupees(s.totalPaise)}</td>
                       </tr>

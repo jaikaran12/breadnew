@@ -34,21 +34,28 @@ describe('CSV files made in the browser', () => {
       storeName: 'Sharma Kirana',
       paymentMode: 'upi',
       totalQuantity: 5,
-      totalPaise: 20500,
+      totalPaise: 20000,
+      discountPaise: 500,
+      returnedQuantity: 2,
       status: 'completed',
       cancelledBy: null,
       cancelReason: null,
       items: [
-        { productId: 1, productName: 'Milk Bread', unitPricePaise: 4000, listPricePaise: 4000, quantity: 3, lineTotalPaise: 12000 },
-        { productId: 2, productName: 'Brown Bread', unitPricePaise: 4250, listPricePaise: 4250, quantity: 2, lineTotalPaise: 8500 },
+        { productId: 1, productName: 'Milk Bread', unitPricePaise: 4000, listPricePaise: 4000, quantity: 3, discountPaise: 0, lineTotalPaise: 12000 },
+        { productId: 2, productName: 'Brown Bread', unitPricePaise: 4250, listPricePaise: 4250, quantity: 2, discountPaise: 500, lineTotalPaise: 8000 },
       ],
+      returns: [{ productId: 3, productName: 'White Bread', quantity: 2, unitPricePaise: 3500 }],
     } as unknown as Sale;
     const bills = salesCsv([sale], 'bills');
-    expect(bills.rows).toEqual([[7, '2026-01-31', '08:45 am', 'Ramesh', 'Gandhi Nagar', 'Sharma Kirana', 'UPI', 5, '205.00', 'completed', '', '']]);
+    expect(bills.rows).toEqual([
+      [7, '2026-01-31', '08:45 am', 'Ramesh', 'Gandhi Nagar', 'Sharma Kirana', 'UPI', 5, '5.00', '200.00', 2, 'completed', '', ''],
+    ]);
     const items = salesCsv([sale], 'items');
-    expect(items.rows.map((r) => [r[6], r[7], r[8], r[9]])).toEqual([
-      ['Milk Bread', 3, '40.00', '120.00'],
-      ['Brown Bread', 2, '42.50', '85.00'],
+    // Type, Product, Qty, Rate, Discount, Amount
+    expect(items.rows.map((r) => r.slice(6, 12))).toEqual([
+      ['Sale', 'Milk Bread', 3, '40.00', '0.00', '120.00'],
+      ['Sale', 'Brown Bread', 2, '42.50', '5.00', '80.00'],
+      ['Expired return', 'White Bread', 2, '', '', '0.00'],
     ]);
   });
 });

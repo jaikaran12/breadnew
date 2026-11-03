@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { discountText } from '../components/Bill';
 import { Keypad } from '../components/Keypad';
 import { Confirm, ProductBadge, TopBar } from '../components/ui';
-import { IconMinus, IconNext, IconPlus, IconTrash } from '../icons';
+import { IconBasket, IconMinus, IconNext, IconPlus, IconReturn, IconTag, IconTrash } from '../icons';
 import { rupees } from '../money';
 import { vibrate } from '../device';
-import { actions, draftLines, linesTotal, t, useAppState } from '../store';
+import { lineTotal } from '../billMath';
+import { actions, discountFor, draftLines, draftReturns, linesTotal, returnsCount, t, useAppState } from '../store';
 import type { Product } from '../types';
 
 export function CartScreen() {
@@ -26,16 +28,22 @@ export function CartScreen() {
     );
   }
 
+  const mode = draft.mode ?? 'sale';
+  const returning = mode === 'return';
+  const counts = (returning ? draft.ret : draft.qty) ?? {};
   const lines = draftLines(s);
+  const returns = draftReturns(s);
+  const returned = returnsCount(returns);
   const { totalPaise, quantity } = linesTotal(lines);
+  const shopHasDiscounts = catalog.products.some((p) => discountFor(s, draft.storeId, p.id));
 
   const change = (p: Product, delta: number) => {
     vibrate();
-    actions.setQty(p.id, (draft.qty[p.id] ?? 0) + delta);
+    actions.setQty(p.id, (counts[p.id] ?? 0) + delta);
   };
 
   return (
-    <div className="screen screen-with-bar">
+    <div className={`screen screen-with-bar ${returning ? 'mode-return' : ''}`}>
       <TopBar
         title={draft.storeName}
         subtitle={draft.areaName}
@@ -45,21 +53,67 @@ export function CartScreen() {
           </button>
         }
       />
+      <div className="mode-tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={!returning}
+          className={`mode-tab mode-tab-sale ${!returning ? 'mode-tab-on' : ''}`}
+          onClick={() => actions.setMode('sale')}
+        >
+          <IconBasket size={24} /> {t('saleTab')}
+          {quantity > 0 && <span className="mode-count">{quantity}</span>}
+        </button>
+        <button
+          role="tab"
+          aria-selected={returning}
+          className={`mode-tab mode-tab-return ${returning ? 'mode-tab-on' : ''}`}
+          onClick={() => actions.setMode('return')}
+        >
+          <IconReturn size={24} /> {t('returnTab')}
+          {returned > 0 && <span className="mode-count">{returned}</span>}
+        </button>
+      </div>
       <main className="content content-tight">
-        <div className="hint center">{t('tapToType')}</div>
+        {returning ? (
+          <div className="alert alert-amber return-hint">
+            <IconReturn size={22} /> {t('returnHint')}
+          </div>
+        ) : (
+          <>
+            {shopHasDiscounts && (
+              <div className="alert alert-green special-rates">
+                <IconTag size={22} /> {t('specialRates')}
+              </div>
+            )}
+            <div className="hint center">{t('tapToType')}</div>
+          </>
+        )}
         <ul className="product-list">
           {catalog.products.map((p) => {
-            const qty = draft.qty[p.id] ?? 0;
+            const qty = counts[p.id] ?? 0;
+            const rule = returning ? null : discountFor(s, draft.storeId, p.id);
             return (
-              <li key={p.id} className={`product ${qty > 0 ? 'product-on' : ''}`}>
+              <li key={p.id} className={`product ${qty > 0 ? (returning ? 'product-return' : 'product-on') : ''}`}>
                 <ProductBadge name={p.name} color={p.color} />
                 <div className="product-info">
                   <div className="product-name">{p.name}</div>
                   <div className="product-meta">
                     {p.localName && <span className="product-local">{p.localName}</span>}
-                    <span className="product-price">{rupees(p.pricePaise)}</span>
+                    {returning ? (
+                      <span className="product-free">{t('noCharge')}</span>
+                    ) : (
+                      <>
+                        <span className={`product-price ${rule ? 'product-price-old' : ''}`}>{rupees(p.pricePaise)}</span>
+                        {rule && <span className="product-discount">{discountText(rule)}</span>}
+                      </>
+                    )}
                   </div>
-                  {qty > 0 && <div className="product-line">= {rupees(qty * p.pricePaise)}</div>}
+                  {qty > 0 && !returning && <div className="product-line">= {rupees(lineTotal(rule, p.pricePaise, qty))}</div>}
+                  {qty > 0 && returning && (
+                    <div className="product-line product-line-return">
+                      <IconReturn size={16} /> {t('returnedN', { n: qty })}
+                    </div>
+                  )}
                 </div>
                 <div className="stepper">
                   <button
@@ -81,9 +135,9 @@ export function CartScreen() {
             );
           })}
         </ul>
-        {lines.length > 0 && (
+        {(returning ? returns.length > 0 : lines.length > 0) && (
           <button className="btn btn-light btn-block" onClick={() => setConfirmClear(true)}>
-            <IconTrash /> {t('clearAll')}
+            <IconTrash /> {returning ? t('clearReturns') : t('clearAll')}
           </button>
         )}
       </main>
@@ -96,16 +150,27 @@ export function CartScreen() {
           </strong>
           <span className="bar-small">
             {quantity} {t('pcs')} · {t('itemsN', { n: lines.length })}
+            {returned > 0 && (
+              <span className="bar-returned" data-testid="cart-returned">
+                <IconReturn size={14} /> {t('returnedN', { n: returned })}
+              </span>
+            )}
           </span>
         </div>
-        <button className="btn btn-green btn-next" disabled={lines.length === 0} onClick={() => actions.go({ name: 'review' })}>
+        <button
+          className="btn btn-green btn-next"
+          disabled={lines.length === 0 && returns.length === 0}
+          onClick={() => actions.go({ name: 'review' })}
+        >
           {t('next')} <IconNext size={26} />
         </button>
       </div>
 
       <Keypad
         product={keypadFor}
-        value={keypadFor ? draft.qty[keypadFor.id] ?? 0 : 0}
+        mode={mode}
+        discount={keypadFor && !returning ? discountFor(s, draft.storeId, keypadFor.id) : null}
+        value={keypadFor ? counts[keypadFor.id] ?? 0 : 0}
         onClose={() => setKeypadFor(null)}
         onDone={(q) => {
           if (keypadFor) actions.setQty(keypadFor.id, q);
@@ -114,7 +179,7 @@ export function CartScreen() {
       />
       <Confirm
         open={confirmClear}
-        text={t('clearAllConfirm')}
+        text={returning ? t('clearReturnsConfirm') : t('clearAllConfirm')}
         danger
         onNo={() => setConfirmClear(false)}
         onYes={() => {

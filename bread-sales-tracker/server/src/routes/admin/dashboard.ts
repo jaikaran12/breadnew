@@ -13,7 +13,7 @@ export function dashboardRouter(config: Config, db: Db): Router {
   router.get('/', async (req, res) => {
     const today = todayInZone(config.appTimezone);
     const date = parseDateParam(req.query.date, today);
-    const [totals, byDriver, byArea, byProduct, recent, counts] = await Promise.all([
+    const [totals, byDriver, byArea, byProduct, returnsByProduct, recent, counts] = await Promise.all([
       db.first(
         `SELECT ${SUMMARY_COLUMNS},
                 coalesce(sum(total_paise) FILTER (WHERE status = 'cancelled'), 0) AS "cancelledPaise",
@@ -33,7 +33,8 @@ export function dashboardRouter(config: Config, db: Db): Router {
       ),
       db.all(
         `SELECT a.id AS "areaId", a.name,
-                count(s.id) AS bills, coalesce(sum(s.total_paise), 0) AS "totalPaise",
+                count(s.id) FILTER (WHERE s.total_quantity > 0) AS bills, coalesce(sum(s.total_paise), 0) AS "totalPaise",
+                coalesce(sum(s.returned_quantity), 0) AS "returnedQuantity",
                 count(DISTINCT s.store_id) AS "storesVisited",
                 (SELECT count(*) FROM stores x WHERE x.area_id = a.id AND x.is_active = 1) AS "totalStores"
            FROM sales s JOIN areas a ON a.id = s.area_id
@@ -49,9 +50,19 @@ export function dashboardRouter(config: Config, db: Db): Router {
           GROUP BY p.id ORDER BY p.sort_order, lower(p.name)`,
         [date],
       ),
+      // Expired bread taken back (and replaced) today
+      db.all(
+        `SELECT p.id AS "productId", p.name, p.color, sum(r.quantity) AS quantity,
+                sum(r.quantity * r.unit_price_paise) AS "valuePaise", count(DISTINCT s.store_id) AS stores
+           FROM sale_returns r JOIN sales s ON s.id = r.sale_id JOIN products p ON p.id = r.product_id
+          WHERE s.sale_date = ?1 AND s.status = 'completed'
+          GROUP BY p.id ORDER BY quantity DESC, p.sort_order`,
+        [date],
+      ),
       db.all(
         `SELECT s.id, s.sold_at AS "soldAt", s.payment_mode AS "paymentMode", s.total_paise AS "totalPaise",
-                s.total_quantity AS "totalQuantity", s.status, d.name AS "driverName", st.name AS "storeName",
+                s.total_quantity AS "totalQuantity", s.returned_quantity AS "returnedQuantity",
+                s.discount_paise AS "discountPaise", s.status, d.name AS "driverName", st.name AS "storeName",
                 a.name AS "areaName"
            FROM sales s JOIN drivers d ON d.id = s.driver_id JOIN stores st ON st.id = s.store_id
            JOIN areas a ON a.id = s.area_id
@@ -66,7 +77,7 @@ export function dashboardRouter(config: Config, db: Db): Router {
                 (SELECT count(*) FROM areas WHERE is_active = 1) AS areas`,
       ),
     ]);
-    res.json({ date, today, totals, byDriver, byArea, byProduct, recent, counts });
+    res.json({ date, today, totals, byDriver, byArea, byProduct, returnsByProduct, recent, counts });
   });
 
   /** Sales of the 14 days up to `date` (a separate call: it changes slowly, so the website asks less often). */
@@ -75,7 +86,7 @@ export function dashboardRouter(config: Config, db: Db): Router {
     const date = parseDateParam(req.query.date, today);
     const first = addDays(date, -(TREND_DAYS - 1));
     const rows = await db.all<{ date: string; bills: number; totalPaise: number }>(
-      `SELECT sale_date AS date, count(*) AS bills, sum(total_paise) AS "totalPaise"
+      `SELECT sale_date AS date, count(*) FILTER (WHERE total_quantity > 0) AS bills, sum(total_paise) AS "totalPaise"
          FROM sales WHERE sale_date BETWEEN ?1 AND ?2 AND status = 'completed'
         GROUP BY sale_date`,
       [first, date],

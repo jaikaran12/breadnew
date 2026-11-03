@@ -76,7 +76,22 @@ export async function fetchSalesForExport(query: SalesQuery & { from: string; to
 export function salesCsv(sales: Sale[], type: 'bills' | 'items'): { header: string[]; rows: unknown[][] } {
   if (type === 'bills') {
     return {
-      header: ['Bill no', 'Date', 'Time', 'Driver', 'Area', 'Shop', 'Payment', 'Units', 'Amount (Rs)', 'Status', 'Cancelled by', 'Cancel reason'],
+      header: [
+        'Bill no',
+        'Date',
+        'Time',
+        'Driver',
+        'Area',
+        'Shop',
+        'Payment',
+        'Units',
+        'Discount (Rs)',
+        'Amount (Rs)',
+        'Expired taken back (units)',
+        'Status',
+        'Cancelled by',
+        'Cancel reason',
+      ],
       rows: sales.map((s) => [
         s.id,
         s.saleDate,
@@ -84,9 +99,11 @@ export function salesCsv(sales: Sale[], type: 'bills' | 'items'): { header: stri
         s.driverName,
         s.areaName,
         s.storeName,
-        PAYMENT_LABEL[s.paymentMode] ?? s.paymentMode,
+        s.totalQuantity > 0 ? (PAYMENT_LABEL[s.paymentMode] ?? s.paymentMode) : '',
         s.totalQuantity,
+        paiseText(s.discountPaise ?? 0),
         paiseText(s.totalPaise),
+        s.returnedQuantity ?? 0,
         s.status,
         s.cancelledBy ?? '',
         s.cancelReason ?? '',
@@ -94,23 +111,57 @@ export function salesCsv(sales: Sale[], type: 'bills' | 'items'): { header: stri
     };
   }
   return {
-    header: ['Bill no', 'Date', 'Time', 'Driver', 'Area', 'Shop', 'Product', 'Qty', 'Rate (Rs)', 'Amount (Rs)', 'Payment', 'Status'],
-    rows: sales.flatMap((s) =>
-      s.items.map((i) => [
+    header: [
+      'Bill no',
+      'Date',
+      'Time',
+      'Driver',
+      'Area',
+      'Shop',
+      'Type',
+      'Product',
+      'Qty',
+      'Rate (Rs)',
+      'Discount (Rs)',
+      'Amount (Rs)',
+      'Payment',
+      'Status',
+    ],
+    rows: sales.flatMap((s) => [
+      ...s.items.map((i) => [
         s.id,
         s.saleDate,
         clock(s.soldAt),
         s.driverName,
         s.areaName,
         s.storeName,
+        'Sale',
         i.productName,
         i.quantity,
         paiseText(i.unitPricePaise),
+        paiseText(i.discountPaise ?? 0),
         paiseText(i.lineTotalPaise),
         PAYMENT_LABEL[s.paymentMode] ?? s.paymentMode,
         s.status,
       ]),
-    ),
+      // Expired items taken back and replaced: no money, so no rate or amount.
+      ...(s.returns ?? []).map((r) => [
+        s.id,
+        s.saleDate,
+        clock(s.soldAt),
+        s.driverName,
+        s.areaName,
+        s.storeName,
+        'Expired return',
+        r.productName,
+        r.quantity,
+        '',
+        '',
+        paiseText(0),
+        '',
+        s.status,
+      ]),
+    ]),
   };
 }
 

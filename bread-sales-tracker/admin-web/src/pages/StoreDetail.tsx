@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api';
+import { DiscountEditor } from '../components/DiscountEditor';
 import { SaleModal } from '../components/SaleModal';
 import { Badge, Card, Empty, ErrorBox, InlineBar, Loading, PageHeader, PaymentBadge, Stat } from '../components/ui';
-import { ago, dateLabel, dateTime, num, rupees, time } from '../format';
+import { ago, dateLabel, dateTime, discountLabel, num, priceAfter, rupees, time } from '../format';
 import type { Sale, Store } from '../types';
 import { StoreForm } from './Stores';
 
@@ -17,21 +18,26 @@ interface StoreDetail {
     bills30: number;
     amount30Paise: number;
     credit30Paise: number;
+    discount30Paise: number;
+    returned30: number;
     firstSaleAt: string | null;
     lastSaleAt: string | null;
   };
   products30: Array<{ productId: number; name: string; quantity: number; amountPaise: number }>;
+  returns30: Array<{ productId: number; name: string; quantity: number; valuePaise: number }>;
+  discounts: Array<{ productId: number; name: string; pricePaise: number; isProductActive: boolean; kind: 'percent' | 'amount'; value: number }>;
   recentSales: Sale[];
 }
 
 export function StoreDetailPage() {
   const { id } = useParams();
   const [editing, setEditing] = useState(false);
+  const [editDiscounts, setEditDiscounts] = useState(false);
   const [openSale, setOpenSale] = useState<number | null>(null);
   const q = useQuery({ queryKey: ['store', id], queryFn: () => api.get<StoreDetail>(`/stores/${id}`) });
   if (q.error) return <ErrorBox error={q.error} />;
   if (!q.data) return <Loading />;
-  const { store, stats, products30, recentSales } = q.data;
+  const { store, stats, products30, returns30, discounts, recentSales } = q.data;
   const maxQty = Math.max(0, ...products30.map((p) => p.quantity));
 
   return (
@@ -60,6 +66,9 @@ export function StoreDetailPage() {
             <Link className="btn btn-light" to={`/sales?storeId=${store.id}&from=${q.data.since}`}>
               All bills
             </Link>
+            <button className="btn btn-light" onClick={() => setEditDiscounts(true)}>
+              Discounts
+            </button>
             <button className="btn btn-primary" onClick={() => setEditing(true)}>
               Edit shop
             </button>
@@ -71,6 +80,10 @@ export function StoreDetailPage() {
         <Stat label="Sales, last 30 days" value={rupees(stats.amount30Paise)} hint={`${stats.bills30} bills`} />
         <Stat label="Average bill" value={stats.bills30 ? rupees(Math.round(stats.amount30Paise / stats.bills30)) : '—'} hint="last 30 days" />
         <Stat label="Udhaar, last 30 days" tone="amber" value={rupees(stats.credit30Paise)} />
+        {(stats.discount30Paise > 0 || discounts.length > 0) && (
+          <Stat label="Discount given, 30 days" tone="green" value={rupees(stats.discount30Paise)} />
+        )}
+        {stats.returned30 > 0 && <Stat label="Expired taken back, 30 days" tone="amber" value={`${num(stats.returned30)} pcs`} />}
         <Stat label="Last bill" value={ago(stats.lastSaleAt)} hint={dateTime(stats.lastSaleAt)} />
         <Stat
           label="All time"
@@ -78,6 +91,44 @@ export function StoreDetailPage() {
           hint={`${num(stats.billsAllTime)} bills${stats.firstSaleAt ? ` since ${dateTime(stats.firstSaleAt)}` : ''}`}
         />
       </div>
+      <Card
+        title="Special rates for this shop"
+        actions={
+          <button className="btn btn-light btn-sm" onClick={() => setEditDiscounts(true)}>
+            {discounts.length ? 'Edit discounts' : 'Add discounts'}
+          </button>
+        }
+        flush
+      >
+        {discounts.length === 0 ? (
+          <Empty>No discounts — this shop pays the normal prices.</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Discount</th>
+                  <th className="num">Normal price</th>
+                  <th className="num">Price for this shop</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discounts.map((d) => (
+                  <tr key={d.productId} className={d.isProductActive ? '' : 'row-cancelled'}>
+                    <td>{d.name}</td>
+                    <td>
+                      <Badge tone="green">{discountLabel(d)}</Badge>
+                    </td>
+                    <td className="num">{rupees(d.pricePaise)}</td>
+                    <td className="num strong">{rupees(priceAfter(d, d.pricePaise))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
       <div className="grid-2">
         <Card title="What they buy (last 30 days)" flush>
           {products30.length === 0 ? (
@@ -109,6 +160,30 @@ export function StoreDetailPage() {
             </div>
           )}
         </Card>
+        {returns30.length > 0 && (
+          <Card title="Expired taken back (last 30 days)" flush>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th className="num">Units</th>
+                    <th className="num">Worth (list price)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {returns30.map((r) => (
+                    <tr key={r.productId}>
+                      <td>{r.name}</td>
+                      <td className="num strong">{num(r.quantity)}</td>
+                      <td className="num">{rupees(r.valuePaise)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
         <Card title="Recent bills" flush>
           {recentSales.length === 0 ? (
             <Empty>No bills yet.</Empty>
@@ -134,7 +209,9 @@ export function StoreDetailPage() {
                       </td>
                       <td>{s.driverName}</td>
                       <td>
-                        <PaymentBadge mode={s.paymentMode} /> {s.status === 'cancelled' && <Badge tone="red">Cancelled</Badge>}
+                        {s.totalQuantity > 0 && <PaymentBadge mode={s.paymentMode} />}{' '}
+                        {s.returnedQuantity > 0 && <Badge tone="amber">↩ {s.returnedQuantity} returned</Badge>}{' '}
+                        {s.status === 'cancelled' && <Badge tone="red">Cancelled</Badge>}
                       </td>
                       <td className="num strong">{rupees(s.totalPaise)}</td>
                     </tr>
@@ -146,6 +223,7 @@ export function StoreDetailPage() {
         </Card>
       </div>
       {editing && <StoreForm store={store} onClose={() => setEditing(false)} />}
+      {editDiscounts && <DiscountEditor storeId={store.id} storeName={store.name} onClose={() => setEditDiscounts(false)} />}
       <SaleModal saleId={openSale} onClose={() => setOpenSale(null)} />
     </>
   );

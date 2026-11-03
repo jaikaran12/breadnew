@@ -1,3 +1,5 @@
+import type { DiscountRule } from './billMath';
+
 export type PaymentMode = 'cash' | 'upi' | 'credit';
 export type Lang = 'en' | 'hi';
 
@@ -34,6 +36,14 @@ export interface Product {
   color: string;
 }
 
+/** A shop's special rate on one product: percent (hundredths of a percent: 500 = 5%) or paise off each unit. */
+export interface Discount {
+  storeId: number;
+  productId: number;
+  kind: 'percent' | 'amount';
+  value: number;
+}
+
 export interface Catalog {
   version: string;
   businessName: string;
@@ -46,6 +56,8 @@ export interface Catalog {
   areas: Area[];
   stores: Store[];
   products: Product[];
+  /** Missing in lists downloaded by older app versions. */
+  discounts?: Discount[];
 }
 
 export interface BillLine {
@@ -53,7 +65,18 @@ export interface BillLine {
   name: string;
   unitPricePaise: number;
   quantity: number;
+  /** The shop's discount on this product (none for older bills). */
+  discount?: DiscountRule | null;
+  discountPaise?: number;
+  /** What the shop pays for this line: quantity × rate − discount. */
   lineTotalPaise: number;
+}
+
+/** Expired units taken back and replaced with fresh ones (no money). */
+export interface ReturnLine {
+  productId: number;
+  name: string;
+  quantity: number;
 }
 
 /** A bill saved on the phone that has not reached the server yet. */
@@ -68,6 +91,8 @@ export interface PendingSale {
   saleDate: string;
   paymentMode: PaymentMode;
   items: BillLine[];
+  /** Missing in bills saved by older app versions. */
+  returns?: ReturnLine[];
   totalPaise: number;
   totalQuantity: number;
   attempts: number;
@@ -89,10 +114,22 @@ export interface ServerSale {
   paymentMode: PaymentMode;
   totalPaise: number;
   totalQuantity: number;
+  discountPaise?: number;
+  returnedQuantity?: number;
   status: 'completed' | 'cancelled';
   cancelledBy: 'driver' | 'admin' | null;
   cancelReason: string | null;
-  items: Array<{ productId: number; productName: string; unitPricePaise: number; quantity: number; lineTotalPaise: number }>;
+  items: Array<{
+    productId: number;
+    productName: string;
+    unitPricePaise: number;
+    quantity: number;
+    discountKind?: DiscountRule['kind'] | null;
+    discountValue?: number | null;
+    discountPaise?: number;
+    lineTotalPaise: number;
+  }>;
+  returns?: Array<{ productId: number; productName: string; quantity: number }>;
 }
 
 export interface DayHistory {
@@ -117,6 +154,7 @@ export interface BillView {
   totalPaise: number;
   totalQuantity: number;
   items: BillLine[];
+  returns: ReturnLine[];
   state: BillState;
   error?: string;
   cancelledBy?: 'driver' | 'admin' | null;
@@ -126,6 +164,10 @@ export interface Draft {
   storeId: number;
   areaId: number;
   qty: Record<number, number>;
+  /** Expired units taken back, by product (missing in drafts saved by older app versions). */
+  ret?: Record<number, number>;
+  /** Which counts the +/− buttons change: what is sold, or expired bread taken back. */
+  mode?: 'sale' | 'return';
   paymentMode: PaymentMode;
 }
 

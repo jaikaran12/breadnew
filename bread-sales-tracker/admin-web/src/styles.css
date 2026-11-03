@@ -1244,3 +1244,107 @@ textarea:focus {
   gap: 12px;
   flex-wrap: wrap;
 }
+
+/* ---------- discounts ---------- */
+.discount-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--green-soft);
+  font-weight: 600;
+}
+
+.discount-input {
+  width: 76px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font: inherit;
+  text-align: right;
+}
+
+.discount-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.discount-cell select {
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font: inherit;
+  background: #fff;
+}
+
+.discount-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+}
+
+.discount-table .row-discount td {
+  background: #f3fbf5;
+}
+
+/* ---------- expired returns ---------- */
+.returns-card {
+  margin-top: 12px;
+  border: 2px dashed var(--amber);
+  border-radius: var(--radius);
+  background: #fffaeb;
+  overflow: hidden;
+}
+
+.returns-card-head {
+  padding: 10px 12px;
+  color: #78350f;
+  font-weight: 600;
+}
+
+.returns-card .table td {
+  background: transparent;
+}
+
+/* ---------- shop picker ---------- */
+.picker-search {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font: inherit;
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-top: 10px;
+}
+
+.picker-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.picker-item:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}

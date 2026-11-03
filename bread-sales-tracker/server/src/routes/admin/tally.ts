@@ -18,6 +18,8 @@ interface TallyRow {
   creditPaise: number;
   cancelledBills: number;
   cancelledPaise: number;
+  discountPaise: number;
+  returnedQuantity: number;
   firstSaleAt: string | null;
   lastSaleAt: string | null;
   settlementId: number | null;
@@ -40,13 +42,15 @@ export function tallyRouter(config: Config, db: Db): Router {
     const date = parseDateParam(req.query.date, today);
     const rows = await db.all<TallyRow>(
       `SELECT d.id AS "driverId", d.name AS "driverName", d.phone, d.is_active AS "isActive",
-              count(s.id) FILTER (WHERE s.status = 'completed') AS bills,
+              count(s.id) FILTER (WHERE s.status = 'completed' AND s.total_quantity > 0) AS bills,
               coalesce(sum(s.total_paise) FILTER (WHERE s.status = 'completed'), 0) AS "totalPaise",
               coalesce(sum(s.total_paise) FILTER (WHERE s.status = 'completed' AND s.payment_mode = 'cash'), 0) AS "cashPaise",
               coalesce(sum(s.total_paise) FILTER (WHERE s.status = 'completed' AND s.payment_mode = 'upi'), 0) AS "upiPaise",
               coalesce(sum(s.total_paise) FILTER (WHERE s.status = 'completed' AND s.payment_mode = 'credit'), 0) AS "creditPaise",
               count(s.id) FILTER (WHERE s.status = 'cancelled') AS "cancelledBills",
               coalesce(sum(s.total_paise) FILTER (WHERE s.status = 'cancelled'), 0) AS "cancelledPaise",
+              coalesce(sum(s.discount_paise) FILTER (WHERE s.status = 'completed'), 0) AS "discountPaise",
+              coalesce(sum(s.returned_quantity) FILTER (WHERE s.status = 'completed'), 0) AS "returnedQuantity",
               min(s.sold_at) FILTER (WHERE s.status = 'completed') AS "firstSaleAt",
               max(s.sold_at) FILTER (WHERE s.status = 'completed') AS "lastSaleAt",
               t.id AS "settlementId", t.cash_received_paise AS "cashReceivedPaise",
@@ -80,6 +84,8 @@ export function tallyRouter(config: Config, db: Db): Router {
         upiPaise: sum('upiPaise'),
         creditPaise: sum('creditPaise'),
         cashReceivedPaise: sum('cashReceivedPaise'),
+        discountPaise: sum('discountPaise'),
+        returnedQuantity: sum('returnedQuantity'),
         settledDrivers: drivers.filter((d) => d.settled).length,
         driversWithSales: drivers.filter((d) => d.bills > 0).length,
       },

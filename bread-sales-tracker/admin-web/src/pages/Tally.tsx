@@ -18,6 +18,8 @@ interface TallyRow {
   creditPaise: number;
   cancelledBills: number;
   cancelledPaise: number;
+  discountPaise: number;
+  returnedQuantity: number;
   firstSaleAt: string | null;
   lastSaleAt: string | null;
   settled: boolean;
@@ -40,6 +42,8 @@ interface TallyResponse {
     upiPaise: number;
     creditPaise: number;
     cashReceivedPaise: number;
+    discountPaise: number;
+    returnedQuantity: number;
     settledDrivers: number;
     driversWithSales: number;
   };
@@ -74,6 +78,9 @@ export function TallyPage() {
             value={`${t.settledDrivers} / ${t.driversWithSales}`}
             hint={t.settledDrivers ? `received ${rupees(t.cashReceivedPaise)}` : 'drivers with sales'}
           />
+          {t.returnedQuantity > 0 && (
+            <Stat label="Expired bread to collect" tone="amber" value={`${t.returnedQuantity} pcs`} hint="taken back from shops" />
+          )}
         </div>
       )}
       <Card flush>
@@ -152,6 +159,7 @@ function TallyRowView(props: { row: TallyRow; date: string }) {
           {row.firstSaleAt ? `${time(row.firstSaleAt)} – ${time(row.lastSaleAt)}` : 'no bills'}
           {row.cancelledBills > 0 && ` · ${row.cancelledBills} cancelled (${rupees(row.cancelledPaise)})`}
         </div>
+        {row.returnedQuantity > 0 && <div className="small warn">↩ {row.returnedQuantity} expired pcs to collect</div>}
       </td>
       <td className="num">{row.bills}</td>
       <td className="num">{rupees(row.totalPaise)}</td>

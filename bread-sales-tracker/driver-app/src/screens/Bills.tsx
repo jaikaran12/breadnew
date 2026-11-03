@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { PaymentTag } from '../components/Bill';
 import { TopBar } from '../components/ui';
-import { IconAlert, IconCheck, IconClock, IconRefresh, IconWifiOff, IconX } from '../icons';
+import { IconAlert, IconCheck, IconClock, IconRefresh, IconReturn, IconWifiOff, IconX } from '../icons';
 import { addDays, dateText, timeText } from '../dates';
 import { rupees } from '../money';
 import { actions, billsForDate, summarize, t, timezone, today, useAppState } from '../store';
@@ -87,6 +87,16 @@ export function BillsScreen(props: { date?: string }) {
               {t('credit')} <strong>{rupees(sum.creditPaise)}</strong>
             </span>
           </div>
+          {sum.returned > 0 && (
+            <div className="summary-returned" data-testid="day-returned">
+              <span>
+                <IconReturn size={18} /> {t('returnedDay')}
+              </span>
+              <strong>
+                {sum.returned} {t('pcs')}
+              </strong>
+            </div>
+          )}
           {day?.settled && (
             <div className="summary-settled">
               <IconCheck size={18} /> {t('daySettled')}
@@ -146,7 +156,12 @@ function BillRow(props: { bill: BillView }) {
         <span className="bill-row-shop">{b.storeName}</span>
         <span className="bill-row-sub">
           {timeText(b.soldAt, timezone())}
-          {b.id ? ` · #${b.id}` : ''} · <PaymentTag mode={b.paymentMode} />
+          {b.id ? ` · #${b.id}` : ''} · {b.items.length > 0 && <PaymentTag mode={b.paymentMode} />}
+          {b.returns.length > 0 && (
+            <span className="tag-return">
+              <IconReturn size={14} /> {b.returns.reduce((acc, r) => acc + r.quantity, 0)}
+            </span>
+          )}
         </span>
       </span>
       <span className="bill-row-amount">{rupees(b.totalPaise)}</span>

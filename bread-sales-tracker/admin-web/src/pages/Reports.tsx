@@ -20,6 +20,9 @@ interface Row {
   cashPaise: number;
   upiPaise: number;
   creditPaise: number;
+  discountPaise: number;
+  returnedQuantity: number;
+  returnedValuePaise?: number;
   storesVisited?: number;
   totalStores?: number;
   lastSaleAt?: string | null;
@@ -50,6 +53,8 @@ export function ReportsPage() {
   const max = Math.max(0, ...rows.map((r) => r.amountPaise));
   const totals = q.data?.totals;
   const nameHeader = { product: 'Product', store: 'Shop', area: 'Area', driver: 'Driver', day: 'Date' }[groupBy];
+  const showDiscount = rows.some((r) => r.discountPaise > 0);
+  const showReturns = rows.some((r) => r.returnedQuantity > 0);
 
   return (
     <>
@@ -65,7 +70,19 @@ export function ReportsPage() {
               const second = { product: 'Local name', store: 'Area', area: '', driver: 'Phone', day: 'Day' }[groupBy];
               saveCsv(
                 `report-${groupBy}-${range.from}-to-${range.to}.csv`,
-                [nameHeader, ...(second ? [second] : []), 'Bills', 'Units', 'Amount (Rs)', 'Cash (Rs)', 'UPI (Rs)', 'Udhaar (Rs)'],
+                [
+                  nameHeader,
+                  ...(second ? [second] : []),
+                  'Bills',
+                  'Units',
+                  'Amount (Rs)',
+                  'Cash (Rs)',
+                  'UPI (Rs)',
+                  'Udhaar (Rs)',
+                  'Discount (Rs)',
+                  'Expired taken back (units)',
+                  ...(groupBy === 'product' ? ['Expired worth (Rs)'] : []),
+                ],
                 data.rows.map((r) => [
                   r.label,
                   ...(second ? [r.sublabel ?? ''] : []),
@@ -75,6 +92,9 @@ export function ReportsPage() {
                   paiseText(r.cashPaise),
                   paiseText(r.upiPaise),
                   paiseText(r.creditPaise),
+                  paiseText(r.discountPaise),
+                  r.returnedQuantity,
+                  ...(groupBy === 'product' ? [paiseText(r.returnedValuePaise ?? 0)] : []),
                 ]),
               );
             }}
@@ -119,6 +139,14 @@ export function ReportsPage() {
           <Stat label="Cash" tone="green" value={rupees(totals.cashPaise)} />
           <Stat label="UPI" tone="blue" value={rupees(totals.upiPaise)} />
           <Stat label="Udhaar" tone="amber" value={rupees(totals.creditPaise)} />
+          {(totals.discountPaise > 0 || totals.returnedQuantity > 0) && (
+            <Stat
+              label="Discount given"
+              tone="green"
+              value={rupees(totals.discountPaise)}
+              hint={`↩ ${num(totals.returnedQuantity)} expired taken back`}
+            />
+          )}
         </div>
       )}
       <Card flush>
@@ -142,6 +170,8 @@ export function ReportsPage() {
                   <th className="num">Cash</th>
                   <th className="num">UPI</th>
                   <th className="num">Udhaar</th>
+                  {showDiscount && <th className="num">Discount</th>}
+                  {showReturns && <th className="num">Expired back</th>}
                 </tr>
               </thead>
               <tbody>
@@ -166,6 +196,13 @@ export function ReportsPage() {
                     <td className="num">{rupees(r.cashPaise)}</td>
                     <td className="num">{rupees(r.upiPaise)}</td>
                     <td className="num">{rupees(r.creditPaise)}</td>
+                    {showDiscount && <td className="num">{r.discountPaise ? `−${rupees(r.discountPaise)}` : '—'}</td>}
+                    {showReturns && (
+                      <td className="num">
+                        {r.returnedQuantity ? num(r.returnedQuantity) : '—'}
+                        {r.returnedValuePaise ? <div className="muted small">worth {rupees(r.returnedValuePaise)}</div> : null}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -182,6 +219,8 @@ export function ReportsPage() {
                     <td className="num">{rupees(totals.cashPaise)}</td>
                     <td className="num">{rupees(totals.upiPaise)}</td>
                     <td className="num">{rupees(totals.creditPaise)}</td>
+                    {showDiscount && <td className="num">−{rupees(totals.discountPaise)}</td>}
+                    {showReturns && <td className="num">{num(totals.returnedQuantity)}</td>}
                   </tr>
                 </tfoot>
               )}

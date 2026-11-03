@@ -4,6 +4,7 @@ import { Layout } from './components/Layout';
 import { Loading, ToastHost } from './components/ui';
 import { AreasPage } from './pages/Areas';
 import { DashboardPage } from './pages/Dashboard';
+import { DiscountsPage } from './pages/Discounts';
 import { DriversPage } from './pages/Drivers';
 import { LoginPage } from './pages/Login';
 import { ProductsPage } from './pages/Products';
@@ -37,6 +38,7 @@ export function App() {
           <Route path="stores/:id" element={<StoreDetailPage />} />
           <Route path="areas" element={<AreasPage />} />
           <Route path="products" element={<ProductsPage />} />
+          <Route path="discounts" element={<DiscountsPage />} />
           <Route path="drivers" element={<DriversPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

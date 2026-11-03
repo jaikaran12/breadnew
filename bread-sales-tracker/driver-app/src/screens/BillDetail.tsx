@@ -67,7 +67,13 @@ export function BillDetailScreen(props: { billKey: string }) {
             {bill.storeName}
             <small>{bill.areaName}</small>
           </div>
-          <BillTable lines={bill.items} totalPaise={bill.totalPaise} quantity={bill.totalQuantity} struck={bill.state === 'cancelled'} />
+          <BillTable
+            lines={bill.items}
+            totalPaise={bill.totalPaise}
+            quantity={bill.totalQuantity}
+            returns={bill.returns}
+            struck={bill.state === 'cancelled'}
+          />
           <div className="bill-pay">
             <PaymentTag mode={bill.paymentMode} />
           </div>

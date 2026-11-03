@@ -100,3 +100,15 @@ export const IconSettings = ({ size, className }: P) => (
     <path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z" />
   </svg>
 );
+/** Expired item taken back (arrow going back into a box). */
+export const IconReturn = ({ size, className }: P) => (
+  <svg {...base(size)} className={className}><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
+);
+/** Shopping basket (sale). */
+export const IconBasket = ({ size, className }: P) => (
+  <svg {...base(size)} className={className}><path d="M3 9h18l-2 11H5z" /><path d="M8 9l4-6 4 6" /></svg>
+);
+/** Price tag with % (special rate / discount). */
+export const IconTag = ({ size, className }: P) => (
+  <svg {...base(size)} className={className}><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></svg>
+);

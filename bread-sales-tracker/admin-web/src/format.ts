@@ -85,3 +85,23 @@ export function ago(iso: string | null | undefined): string {
 }
 
 export const PAYMENT_LABEL: Record<string, string> = { cash: 'Cash', upi: 'UPI', credit: 'Udhaar' };
+
+/** "5%" / "2.5%" / "₹2 off each" */
+export function discountLabel(rule: { kind: 'percent' | 'amount'; value: number }): string {
+  return rule.kind === 'percent' ? `${rule.value / 100}% off` : `${rupees(rule.value)} off each`;
+}
+
+/** "5" / "2.5" -> 500 hundredths of a percent; null if not a percentage between 0.01 and 100. */
+export function parsePercent(text: string): number | null {
+  const clean = text.replace(/[%\s]/g, '');
+  if (!/^\d+(\.\d{1,2})?$/.test(clean)) return null;
+  const value = Math.round(Number(clean) * 100);
+  return value >= 1 && value <= 10000 ? value : null;
+}
+
+/** Price for the shop after its discount on one unit (percent rounded to the paisa, like the bills). */
+export function priceAfter(rule: { kind: 'percent' | 'amount'; value: number } | null, pricePaise: number): number {
+  if (!rule) return pricePaise;
+  if (rule.kind === 'percent') return pricePaise - Math.floor((pricePaise * rule.value + 5000) / 10000);
+  return pricePaise - Math.min(rule.value, pricePaise);
+}

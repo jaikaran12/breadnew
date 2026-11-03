@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
-import { dateLabel, dateTime, num, rupees, time } from '../format';
+import { dateLabel, dateTime, discountLabel, num, rupees, time } from '../format';
 import type { Sale } from '../types';
 import { Badge, ErrorBox, Field, Loading, Modal, PaymentBadge, toast } from './ui';
 
@@ -76,44 +76,84 @@ export function SaleModal(props: { saleId: number | null; onClose: () => void })
           )}
           {sale.priceMismatch && (
             <div className="alert alert-amber">
-              Some items were billed at a different rate than the price list (the driver's phone probably had an old price list).
+              Some items were billed at a different rate or discount than the current lists (the driver's phone probably had an
+              old copy of the prices or discounts). The bill keeps what the shop was actually charged.
             </div>
           )}
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th className="num">Qty</th>
-                  <th className="num">Rate</th>
-                  <th className="num">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sale.items.map((i) => (
-                  <tr key={i.productId}>
-                    <td>{i.productName}</td>
-                    <td className="num strong">{num(i.quantity)}</td>
-                    <td className="num">
-                      {rupees(i.unitPricePaise)}
-                      {i.unitPricePaise !== i.listPricePaise && (
-                        <div className="small warn">price list {rupees(i.listPricePaise)}</div>
-                      )}
-                    </td>
-                    <td className="num strong">{rupees(i.lineTotalPaise)}</td>
+          {sale.items.length === 0 ? (
+            <div className="alert alert-blue">Nothing was sold on this visit — only expired items were replaced.</div>
+          ) : (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th className="num">Qty</th>
+                    <th className="num">Rate</th>
+                    {sale.discountPaise > 0 && <th className="num">Discount</th>}
+                    <th className="num">Amount</th>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td>Total</td>
-                  <td className="num">{num(sale.totalQuantity)}</td>
-                  <td />
-                  <td className="num total-cell">{rupees(sale.totalPaise)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {sale.items.map((i) => (
+                    <tr key={i.productId}>
+                      <td>{i.productName}</td>
+                      <td className="num strong">{num(i.quantity)}</td>
+                      <td className="num">
+                        {rupees(i.unitPricePaise)}
+                        {i.unitPricePaise !== i.listPricePaise && (
+                          <div className="small warn">price list {rupees(i.listPricePaise)}</div>
+                        )}
+                      </td>
+                      {sale.discountPaise > 0 && (
+                        <td className="num">
+                          {i.discountPaise > 0 && i.discountKind && i.discountValue ? (
+                            <>
+                              −{rupees(i.discountPaise)}
+                              <div className="small muted">{discountLabel({ kind: i.discountKind, value: i.discountValue })}</div>
+                            </>
+                          ) : (
+                            '—'
+                          )}
+                          {i.discountPaise !== i.listDiscountPaise && (
+                            <div className="small warn">shop discount now {rupees(i.listDiscountPaise)}</div>
+                          )}
+                        </td>
+                      )}
+                      <td className="num strong">{rupees(i.lineTotalPaise)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td>Total</td>
+                    <td className="num">{num(sale.totalQuantity)}</td>
+                    <td />
+                    {sale.discountPaise > 0 && <td className="num">−{rupees(sale.discountPaise)}</td>}
+                    <td className="num total-cell">{rupees(sale.totalPaise)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+          {sale.returns.length > 0 && (
+            <div className="returns-card">
+              <div className="returns-card-head">
+                ↩ Expired taken back and replaced — <strong>{num(sale.returnedQuantity)} pcs</strong> (no charge)
+              </div>
+              <table className="table">
+                <tbody>
+                  {sale.returns.map((r) => (
+                    <tr key={r.productId}>
+                      <td>{r.productName}</td>
+                      <td className="num strong">{num(r.quantity)}</td>
+                      <td className="num muted small">worth {rupees(r.quantity * r.unitPricePaise)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div className="muted small">
             Received by server {dateTime(sale.createdAt)}
             {q.data?.daySettled && (
