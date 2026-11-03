@@ -20,6 +20,7 @@ interface TallyRow {
   cancelledPaise: number;
   discountPaise: number;
   returnedQuantity: number;
+  returnedPaise: number;
   firstSaleAt: string | null;
   lastSaleAt: string | null;
   settled: boolean;
@@ -44,6 +45,7 @@ interface TallyResponse {
     cashReceivedPaise: number;
     discountPaise: number;
     returnedQuantity: number;
+    returnedPaise: number;
     settledDrivers: number;
     driversWithSales: number;
   };
@@ -69,7 +71,11 @@ export function TallyPage() {
       <ErrorBox error={q.error} />
       {t && (
         <div className="stats">
-          <Stat label="Total sales" value={rupees(t.totalPaise)} hint={`${t.bills} bills`} />
+          <Stat
+            label={t.returnedPaise > 0 ? 'Net sales' : 'Total sales'}
+            value={rupees(t.totalPaise)}
+            hint={`${t.bills} bills${t.returnedPaise > 0 ? ` · after −${rupees(t.returnedPaise)} expired` : ''}`}
+          />
           <Stat label="Cash expected" tone="green" value={rupees(t.cashPaise)} hint="from cash bills" />
           <Stat label="UPI" tone="blue" value={rupees(t.upiPaise)} hint="check in your UPI app" />
           <Stat label="Udhaar" tone="amber" value={rupees(t.creditPaise)} hint="given on credit" />
@@ -79,7 +85,12 @@ export function TallyPage() {
             hint={t.settledDrivers ? `received ${rupees(t.cashReceivedPaise)}` : 'drivers with sales'}
           />
           {t.returnedQuantity > 0 && (
-            <Stat label="Expired bread to collect" tone="amber" value={`${t.returnedQuantity} pcs`} hint="taken back from shops" />
+            <Stat
+              label="Expired bread to collect"
+              tone="amber"
+              value={`${t.returnedQuantity} pcs`}
+              hint={t.returnedPaise > 0 ? `${rupees(t.returnedPaise)} taken off bills` : 'taken back from shops'}
+            />
           )}
         </div>
       )}
@@ -159,7 +170,11 @@ function TallyRowView(props: { row: TallyRow; date: string }) {
           {row.firstSaleAt ? `${time(row.firstSaleAt)} – ${time(row.lastSaleAt)}` : 'no bills'}
           {row.cancelledBills > 0 && ` · ${row.cancelledBills} cancelled (${rupees(row.cancelledPaise)})`}
         </div>
-        {row.returnedQuantity > 0 && <div className="small warn">↩ {row.returnedQuantity} expired pcs to collect</div>}
+        {row.returnedQuantity > 0 && (
+          <div className="small warn">
+            ↩ {row.returnedQuantity} expired pcs to collect{row.returnedPaise > 0 ? ` (−${rupees(row.returnedPaise)} on bills)` : ''}
+          </div>
+        )}
       </td>
       <td className="num">{row.bills}</td>
       <td className="num">{rupees(row.totalPaise)}</td>

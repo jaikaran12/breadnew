@@ -101,13 +101,20 @@ export interface SaleItem {
   lineTotalPaise: number;
 }
 
-/** Expired units taken back and replaced (no money). */
+/** Expired units taken back; their value (quantity × rate − the shop's discount) comes off the bill. */
 export interface SaleReturn {
   productId: number;
   productName: string;
   quantity: number;
-  /** List price of one unit when the bill arrived. */
+  /** Rate of one unit used for the value. */
   unitPricePaise: number;
+  listPricePaise: number;
+  discountKind: DiscountRule['kind'] | null;
+  discountValue: number | null;
+  discountPaise: number;
+  listDiscountPaise: number;
+  /** Taken off the bill (0 for returns made with older app versions: swapped free of charge). */
+  creditPaise: number;
 }
 
 export interface Sale {
@@ -122,10 +129,14 @@ export interface Sale {
   soldAt: string;
   saleDate: string;
   paymentMode: PaymentMode;
+  /** Net amount: what was given (after discounts) minus the returns. Below zero = the shop got money back. */
   totalPaise: number;
+  /** Units given. */
   totalQuantity: number;
   discountPaise: number;
   returnedQuantity: number;
+  /** Value of the returns, already taken off totalPaise. */
+  returnedPaise: number;
   status: 'completed' | 'cancelled';
   cancelledAt: string | null;
   cancelledBy: 'driver' | 'admin' | null;
@@ -138,6 +149,7 @@ export interface Sale {
 
 export interface Summary {
   bills: number;
+  /** Net amount (given − returned). */
   totalPaise: number;
   cashPaise: number;
   upiPaise: number;
@@ -145,6 +157,7 @@ export interface Summary {
   quantity: number;
   discountPaise: number;
   returnedQuantity: number;
+  returnedPaise: number;
   cancelledBills: number;
   cancelledPaise?: number;
 }

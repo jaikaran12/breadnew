@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { discountText } from '../components/Bill';
+import { discountText, netLabel } from '../components/Bill';
 import { Keypad } from '../components/Keypad';
 import { Confirm, ProductBadge, TopBar } from '../components/ui';
 import { IconBasket, IconMinus, IconNext, IconPlus, IconReturn, IconTag, IconTrash } from '../icons';
 import { rupees } from '../money';
 import { vibrate } from '../device';
 import { lineTotal } from '../billMath';
-import { actions, discountFor, draftLines, draftReturns, linesTotal, returnsCount, t, useAppState } from '../store';
+import { actions, billTotals, discountFor, draftLines, draftReturns, t, useAppState } from '../store';
 import type { Product } from '../types';
 
 export function CartScreen() {
@@ -33,8 +33,9 @@ export function CartScreen() {
   const counts = (returning ? draft.ret : draft.qty) ?? {};
   const lines = draftLines(s);
   const returns = draftReturns(s);
-  const returned = returnsCount(returns);
-  const { totalPaise, quantity } = linesTotal(lines);
+  const totals = billTotals(lines, returns);
+  const { quantity, returnedQuantity: returned } = totals;
+  const net = netLabel(totals.totalPaise);
   const shopHasDiscounts = catalog.products.some((p) => discountFor(s, draft.storeId, p.id));
 
   const change = (p: Product, delta: number) => {
@@ -91,7 +92,8 @@ export function CartScreen() {
         <ul className="product-list">
           {catalog.products.map((p) => {
             const qty = counts[p.id] ?? 0;
-            const rule = returning ? null : discountFor(s, draft.storeId, p.id);
+            // Returns are valued at the shop's own rate too, so swapping one for one comes to ₹0.
+            const rule = discountFor(s, draft.storeId, p.id);
             return (
               <li key={p.id} className={`product ${qty > 0 ? (returning ? 'product-return' : 'product-on') : ''}`}>
                 <ProductBadge name={p.name} color={p.color} />
@@ -99,19 +101,13 @@ export function CartScreen() {
                   <div className="product-name">{p.name}</div>
                   <div className="product-meta">
                     {p.localName && <span className="product-local">{p.localName}</span>}
-                    {returning ? (
-                      <span className="product-free">{t('noCharge')}</span>
-                    ) : (
-                      <>
-                        <span className={`product-price ${rule ? 'product-price-old' : ''}`}>{rupees(p.pricePaise)}</span>
-                        {rule && <span className="product-discount">{discountText(rule)}</span>}
-                      </>
-                    )}
+                    <span className={`product-price ${rule ? 'product-price-old' : ''}`}>{rupees(p.pricePaise)}</span>
+                    {rule && <span className="product-discount">{discountText(rule)}</span>}
                   </div>
                   {qty > 0 && !returning && <div className="product-line">= {rupees(lineTotal(rule, p.pricePaise, qty))}</div>}
                   {qty > 0 && returning && (
                     <div className="product-line product-line-return">
-                      <IconReturn size={16} /> {t('returnedN', { n: qty })}
+                      <IconReturn size={16} /> {t('returnedN', { n: qty })} = −{rupees(lineTotal(rule, p.pricePaise, qty))}
                     </div>
                   )}
                 </div>
@@ -144,15 +140,15 @@ export function CartScreen() {
 
       <div className="bottombar">
         <div className="bar-total">
-          <span className="bar-label">{t('total')}</span>
-          <strong className="bar-amount" data-testid="cart-total">
-            {rupees(totalPaise)}
+          <span className="bar-label">{returned > 0 ? net.label : t('total')}</span>
+          <strong className={`bar-amount ${totals.totalPaise < 0 ? 'amount-back' : ''}`} data-testid="cart-total">
+            {returned > 0 ? net.amount : rupees(totals.totalPaise)}
           </strong>
           <span className="bar-small">
             {quantity} {t('pcs')} · {t('itemsN', { n: lines.length })}
             {returned > 0 && (
               <span className="bar-returned" data-testid="cart-returned">
-                <IconReturn size={14} /> {t('returnedN', { n: returned })}
+                <IconReturn size={14} /> {t('returnedN', { n: returned })} · −{rupees(totals.returnedPaise)}
               </span>
             )}
           </span>
@@ -169,7 +165,7 @@ export function CartScreen() {
       <Keypad
         product={keypadFor}
         mode={mode}
-        discount={keypadFor && !returning ? discountFor(s, draft.storeId, keypadFor.id) : null}
+        discount={keypadFor ? discountFor(s, draft.storeId, keypadFor.id) : null}
         value={keypadFor ? counts[keypadFor.id] ?? 0 : 0}
         onClose={() => setKeypadFor(null)}
         onDone={(q) => {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { BillTable, PAYMENT_ICON, paymentLabel } from '../components/Bill';
 import { TopBar } from '../components/ui';
 import { IconCheck } from '../icons';
-import { actions, draftLines, draftReturns, linesTotal, t, useAppState } from '../store';
+import { actions, billTotals, draftLines, draftReturns, t, useAppState } from '../store';
 import type { PaymentMode } from '../types';
 
 const MODES: PaymentMode[] = ['cash', 'upi', 'credit'];
@@ -18,7 +18,7 @@ export function ReviewScreen() {
     if (empty && !saving) actions.reset({ name: 'home' });
   }, [empty, saving]);
   if (!draft || empty) return null;
-  const { totalPaise, quantity } = linesTotal(lines);
+  const { totalPaise, quantity } = billTotals(lines, returns);
 
   const save = () => {
     if (saving) return;
@@ -36,8 +36,10 @@ export function ReviewScreen() {
           <div className="bill-shop">{draft.storeName}</div>
           <BillTable lines={lines} totalPaise={totalPaise} quantity={quantity} returns={returns} />
         </div>
-        {lines.length > 0 && <h2 className="section-title">{t('howPaid')}</h2>}
-        {lines.length > 0 && (
+        {/* Nothing to collect when the expired items taken back are worth exactly what was given. */}
+        {totalPaise === 0 && <div className="nothing-to-pay">{t('nothingToPay')}</div>}
+        {totalPaise !== 0 && <h2 className="section-title">{totalPaise > 0 ? t('howPaid') : t('howGiveBack')}</h2>}
+        {totalPaise !== 0 && (
         <div className="pay-modes" role="radiogroup">
           {MODES.map((m) => {
             const Icon = PAYMENT_ICON[m];

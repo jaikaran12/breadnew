@@ -320,3 +320,20 @@ export function DownloadButton(props: {
     </button>
   );
 }
+
+/** How a bill was settled: payment mode, or nothing to pay (expired swapped for fresh), or returns only. */
+export function BillBadges(props: { sale: { totalPaise: number; totalQuantity: number; paymentMode: string } }) {
+  const { totalPaise, totalQuantity, paymentMode } = props.sale;
+  return (
+    <>
+      {totalPaise !== 0 && <PaymentBadge mode={paymentMode} />}
+      {totalPaise === 0 && totalQuantity > 0 && <Badge tone="amber">nothing to pay</Badge>}
+      {totalQuantity === 0 && (
+        <>
+          {' '}
+          <Badge tone="amber">returns only</Badge>
+        </>
+      )}
+    </>
+  );
+}

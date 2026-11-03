@@ -56,12 +56,21 @@ const saleSchema = z
         }),
       )
       .max(200),
-    // Expired items taken back and replaced with fresh ones (no money). Older app versions do not send this.
+    // Expired items taken back; their value is taken off the bill. Older app versions do not send returns,
+    // or send them without a rate (then they cost nothing).
     returns: z
-      .array(z.object({ productId: z.number().int().positive(), quantity: z.number().int().min(1).max(100_000) }))
+      .array(
+        z.object({
+          productId: z.number().int().positive(),
+          quantity: z.number().int().min(1).max(100_000),
+          unitPricePaise: z.number().int().min(0).max(10_000_000).optional(),
+          discount: discountSchema.nullable().optional(),
+        }),
+      )
       .max(200)
       .optional(),
-    totalPaise: z.number().int().min(0),
+    // Net amount: given minus returned (below zero when the shop gets money back).
+    totalPaise: z.number().int().min(-10_000_000_000).max(10_000_000_000),
   })
   .refine((b) => b.items.length + (b.returns?.length ?? 0) > 0, { message: 'The bill has no items', path: ['items'] });
 

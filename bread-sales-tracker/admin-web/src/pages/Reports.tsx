@@ -22,7 +22,8 @@ interface Row {
   creditPaise: number;
   discountPaise: number;
   returnedQuantity: number;
-  returnedValuePaise?: number;
+  /** Value of the expired units taken back, already taken off amountPaise. */
+  returnedPaise: number;
   storesVisited?: number;
   totalStores?: number;
   lastSaleAt?: string | null;
@@ -60,7 +61,7 @@ export function ReportsPage() {
     <>
       <PageHeader
         title="Reports"
-        subtitle="Sales grouped by product, shop, area, driver or day. Cancelled bills are not counted."
+        subtitle="Sales grouped by product, shop, area, driver or day. Amounts are net: expired items taken back are already taken off. Cancelled bills are not counted."
         actions={
           <DownloadButton
             label="Download CSV (Excel)"
@@ -75,13 +76,13 @@ export function ReportsPage() {
                   ...(second ? [second] : []),
                   'Bills',
                   'Units',
-                  'Amount (Rs)',
+                  'Net amount (Rs)',
                   'Cash (Rs)',
                   'UPI (Rs)',
                   'Udhaar (Rs)',
                   'Discount (Rs)',
                   'Expired taken back (units)',
-                  ...(groupBy === 'product' ? ['Expired worth (Rs)'] : []),
+                  'Expired taken back (Rs)',
                 ],
                 data.rows.map((r) => [
                   r.label,
@@ -94,7 +95,7 @@ export function ReportsPage() {
                   paiseText(r.creditPaise),
                   paiseText(r.discountPaise),
                   r.returnedQuantity,
-                  ...(groupBy === 'product' ? [paiseText(r.returnedValuePaise ?? 0)] : []),
+                  paiseText(r.returnedPaise ?? 0),
                 ]),
               );
             }}
@@ -133,7 +134,15 @@ export function ReportsPage() {
       </Card>
       {totals && (
         <div className="stats">
-          <Stat label="Sales" value={rupees(totals.totalPaise)} hint={`${dateLabel(range.from)} – ${dateLabel(range.to)}`} />
+          <Stat
+            label={totals.returnedPaise > 0 ? 'Net sales' : 'Sales'}
+            value={rupees(totals.totalPaise)}
+            hint={
+              totals.returnedPaise > 0
+                ? `after −${rupees(totals.returnedPaise)} expired taken back`
+                : `${dateLabel(range.from)} – ${dateLabel(range.to)}`
+            }
+          />
           <Stat label="Bills" value={num(totals.bills)} hint={`${num(totals.storesVisited)} different shops`} />
           <Stat label="Units" value={num(totals.quantity)} />
           <Stat label="Cash" tone="green" value={rupees(totals.cashPaise)} />
@@ -144,7 +153,7 @@ export function ReportsPage() {
               label="Discount given"
               tone="green"
               value={rupees(totals.discountPaise)}
-              hint={`↩ ${num(totals.returnedQuantity)} expired taken back`}
+              hint={`↩ ${num(totals.returnedQuantity)} expired taken back${totals.returnedPaise > 0 ? ` (−${rupees(totals.returnedPaise)})` : ''}`}
             />
           )}
         </div>
@@ -165,7 +174,7 @@ export function ReportsPage() {
                   {groupBy === 'store' && <th>Last bill</th>}
                   <th className="num">Bills</th>
                   <th className="num">Units</th>
-                  <th className="num">Amount</th>
+                  <th className="num">{showReturns ? 'Net amount' : 'Amount'}</th>
                   <th className="bar-col" />
                   <th className="num">Cash</th>
                   <th className="num">UPI</th>
@@ -189,7 +198,7 @@ export function ReportsPage() {
                     {groupBy === 'store' && <td className="small">{dateTime(r.lastSaleAt)}</td>}
                     <td className="num">{num(r.bills)}</td>
                     <td className="num">{num(r.quantity)}</td>
-                    <td className="num strong">{rupees(r.amountPaise)}</td>
+                    <td className={`num strong ${r.amountPaise < 0 ? 'amount-back' : ''}`}>{rupees(r.amountPaise)}</td>
                     <td className="bar-col">
                       <InlineBar value={r.amountPaise} max={max} />
                     </td>
@@ -200,7 +209,7 @@ export function ReportsPage() {
                     {showReturns && (
                       <td className="num">
                         {r.returnedQuantity ? num(r.returnedQuantity) : '—'}
-                        {r.returnedValuePaise ? <div className="muted small">worth {rupees(r.returnedValuePaise)}</div> : null}
+                        {r.returnedPaise ? <div className="muted small">−{rupees(r.returnedPaise)}</div> : null}
                       </td>
                     )}
                   </tr>
@@ -220,7 +229,12 @@ export function ReportsPage() {
                     <td className="num">{rupees(totals.upiPaise)}</td>
                     <td className="num">{rupees(totals.creditPaise)}</td>
                     {showDiscount && <td className="num">−{rupees(totals.discountPaise)}</td>}
-                    {showReturns && <td className="num">{num(totals.returnedQuantity)}</td>}
+                    {showReturns && (
+                      <td className="num">
+                        {num(totals.returnedQuantity)}
+                        {totals.returnedPaise > 0 && <div className="muted small">−{rupees(totals.returnedPaise)}</div>}
+                      </td>
+                    )}
                   </tr>
                 </tfoot>
               )}

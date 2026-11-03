@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { Badge, BarChart, Card, DayPicker, Empty, ErrorBox, InlineBar, Loading, PageHeader, PaymentBadge, Stat } from '../components/ui';
+import { Badge, BarChart, Card, DayPicker, Empty, ErrorBox, InlineBar, Loading, PageHeader, BillBadges, Stat } from '../components/ui';
 import { SaleModal } from '../components/SaleModal';
 import { ago, num, rupees, shortDate, time, todayIn } from '../format';
 import { useAuth } from '../auth';
@@ -14,7 +14,7 @@ interface Dashboard {
   today: string;
   totals: Summary & { storesVisited: number; activeDrivers: number; cancelledPaise: number };
   byDriver: Array<Summary & { driverId: number; name: string; storesVisited: number; lastSaleAt: string | null }>;
-  byArea: Array<{ areaId: number; name: string; bills: number; totalPaise: number; storesVisited: number; totalStores: number }>;
+  byArea: Array<{ areaId: number; name: string; bills: number; totalPaise: number; returnedPaise: number; storesVisited: number; totalStores: number }>;
   byProduct: Array<{ productId: number; name: string; color: string; quantity: number; totalPaise: number }>;
   returnsByProduct: Array<{ productId: number; name: string; color: string; quantity: number; valuePaise: number; stores: number }>;
   recent: Array<{
@@ -24,6 +24,7 @@ interface Dashboard {
     totalPaise: number;
     totalQuantity: number;
     returnedQuantity: number;
+    returnedPaise: number;
     discountPaise: number;
     status: string;
     driverName: string;
@@ -91,7 +92,11 @@ export function DashboardPage() {
         <>
           {(d.counts.products === 0 || d.counts.stores === 0 || d.counts.drivers === 0) && <GettingStarted counts={d.counts} />}
           <div className="stats">
-            <Stat label="Total sales" value={rupees(d.totals.totalPaise)} hint={`${num(d.totals.quantity)} units`} />
+            <Stat
+              label={d.totals.returnedPaise > 0 ? 'Net sales' : 'Total sales'}
+              value={rupees(d.totals.totalPaise)}
+              hint={`${num(d.totals.quantity)} units${d.totals.returnedPaise > 0 ? ` · after −${rupees(d.totals.returnedPaise)} expired` : ''}`}
+            />
             <Stat label="Bills" value={num(d.totals.bills)} hint={d.totals.bills ? `avg ${rupees(Math.round(d.totals.totalPaise / d.totals.bills))}` : '—'} />
             <Stat label="Shops visited" value={`${num(d.totals.storesVisited)} / ${num(d.counts.stores)}`} hint={`${d.totals.activeDrivers} driver(s) out`} />
             <Stat label="Cash" tone="green" value={rupees(d.totals.cashPaise)} hint="to be handed over" />
@@ -102,7 +107,7 @@ export function DashboardPage() {
                 label="Discount given"
                 tone="green"
                 value={rupees(d.totals.discountPaise)}
-                hint={`↩ ${num(d.totals.returnedQuantity)} expired taken back`}
+                hint={`↩ ${num(d.totals.returnedQuantity)} expired taken back${d.totals.returnedPaise > 0 ? ` (−${rupees(d.totals.returnedPaise)})` : ''}`}
               />
             )}
           </div>
@@ -247,7 +252,7 @@ export function DashboardPage() {
                       <th>Product</th>
                       <th className="num">Units</th>
                       <th className="num">Shops</th>
-                      <th className="num">Worth (list price)</th>
+                      <th className="num">Taken off bills</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -258,7 +263,7 @@ export function DashboardPage() {
                         </td>
                         <td className="num strong">{num(r.quantity)}</td>
                         <td className="num">{num(r.stores)}</td>
-                        <td className="num">{rupees(r.valuePaise)}</td>
+                        <td className="num">{r.valuePaise > 0 ? `−${rupees(r.valuePaise)}` : 'no charge'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -294,11 +299,11 @@ export function DashboardPage() {
                           <div className="muted small">{s.areaName}</div>
                         </td>
                         <td>
-                          {s.totalQuantity > 0 ? <PaymentBadge mode={s.paymentMode} /> : <Badge tone="amber">returns only</Badge>}{' '}
+                          <BillBadges sale={s} />{' '}
                           {s.returnedQuantity > 0 && s.totalQuantity > 0 && <Badge tone="amber">↩ {s.returnedQuantity}</Badge>}{' '}
                           {s.status === 'cancelled' && <Badge tone="red">Cancelled</Badge>}
                         </td>
-                        <td className="num strong">{rupees(s.totalPaise)}</td>
+                        <td className={`num strong ${s.totalPaise < 0 ? 'amount-back' : ''}`}>{rupees(s.totalPaise)}</td>
                       </tr>
                     ))}
                   </tbody>

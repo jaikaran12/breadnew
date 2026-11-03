@@ -11,7 +11,7 @@ export function getTimeZone() {
 
 export function rupees(paise: number | null | undefined): string {
   const p = Number(paise ?? 0);
-  const sign = p < 0 ? '-' : '';
+  const sign = p < 0 ? '−' : '';
   const abs = Math.abs(p);
   return `${sign}₹${abs % 100 === 0 ? whole.format(abs / 100) : two.format(abs / 100)}`;
 }

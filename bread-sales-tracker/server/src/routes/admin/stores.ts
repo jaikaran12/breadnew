@@ -153,6 +153,7 @@ export function storesRouter(config: Config, db: Db): Router {
                 coalesce(sum(total_paise) FILTER (WHERE sale_date >= ?2 AND payment_mode = 'credit'), 0) AS "credit30Paise",
                 coalesce(sum(discount_paise) FILTER (WHERE sale_date >= ?2), 0) AS "discount30Paise",
                 coalesce(sum(returned_quantity) FILTER (WHERE sale_date >= ?2), 0) AS "returned30",
+                coalesce(sum(returned_paise) FILTER (WHERE sale_date >= ?2), 0) AS "returned30Paise",
                 min(sold_at) AS "firstSaleAt", max(sold_at) AS "lastSaleAt"
            FROM sales WHERE store_id = ?1 AND status = 'completed'`,
         [id, since],
@@ -166,7 +167,7 @@ export function storesRouter(config: Config, db: Db): Router {
       ),
       db.all(
         `SELECT r.product_id AS "productId", p.name, sum(r.quantity) AS quantity,
-                sum(r.quantity * r.unit_price_paise) AS "valuePaise"
+                sum(r.credit_paise) AS "valuePaise"
            FROM sale_returns r JOIN sales s ON s.id = r.sale_id JOIN products p ON p.id = r.product_id
           WHERE s.store_id = ?1 AND s.status = 'completed' AND s.sale_date >= ?2
           GROUP BY r.product_id ORDER BY p.sort_order, p.name`,

@@ -51,8 +51,8 @@ export function Keypad(props: {
               <div className="keypad-name">{p.name}</div>
               <div className="keypad-price">
                 {p.localName ? `${p.localName} · ` : ''}
-                {returning ? t('noCharge') : rupees(p.pricePaise)}
-                {!returning && props.discount ? ` · ${discountText(props.discount)}` : ''}
+                {rupees(p.pricePaise)}
+                {props.discount ? ` · ${discountText(props.discount)}` : ''}
               </div>
             </div>
           </div>
@@ -62,7 +62,7 @@ export function Keypad(props: {
           <div className="keypad-calc">
             {returning ? (
               <>
-                <IconReturn size={18} /> {t('returnedN', { n: qty })} · <strong>{t('noCharge')}</strong>
+                <IconReturn size={18} /> {t('returnedN', { n: qty })} = <strong>−{rupees(qty * p.pricePaise - off)}</strong>
               </>
             ) : off > 0 ? (
               <>

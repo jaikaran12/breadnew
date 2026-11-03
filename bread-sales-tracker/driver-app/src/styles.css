@@ -1062,6 +1062,7 @@ button:disabled {
 .bill-total small {
   color: var(--muted);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .bill-total strong {
@@ -1189,6 +1190,14 @@ button:disabled {
 .done-title {
   margin: 18px 0 0;
   font-size: 1.6rem;
+}
+
+.done-label {
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .done-amount {
@@ -1597,10 +1606,6 @@ button:disabled {
   color: var(--amber);
 }
 
-.product-free {
-  font-weight: 800;
-  color: var(--amber);
-}
 
 .product-price-old {
   text-decoration: line-through;
@@ -1713,6 +1718,73 @@ button:disabled {
   text-align: right;
   font-weight: 800;
   color: #78350f;
+}
+
+/* Returned lines inside the bill: their value comes off the total */
+.bill-section-row td {
+  padding: 14px 4px 6px;
+  border-bottom: 2px solid var(--amber);
+  color: #78350f;
+  font-weight: 800;
+}
+
+.bill-section-row svg {
+  vertical-align: -3px;
+}
+
+.bill-row-return td {
+  background: #fffaeb;
+  color: #78350f;
+}
+
+.bill-return-off {
+  display: block;
+  color: var(--green-dark);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.bill-sums {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.bill-sum {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.bill-sum small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.bill-sum-return {
+  color: #78350f;
+}
+
+.bill-total-back strong,
+.amount-back {
+  color: var(--red);
+}
+
+.bill-struck .bill-sums {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.nothing-to-pay {
+  margin-top: 12px;
+  text-align: center;
+  font-weight: 800;
+  color: var(--green-dark);
 }
 
 .keypad-mode {

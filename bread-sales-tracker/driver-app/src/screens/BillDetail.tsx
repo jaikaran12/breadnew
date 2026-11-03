@@ -74,9 +74,11 @@ export function BillDetailScreen(props: { billKey: string }) {
             returns={bill.returns}
             struck={bill.state === 'cancelled'}
           />
-          <div className="bill-pay">
-            <PaymentTag mode={bill.paymentMode} />
-          </div>
+          {bill.totalPaise !== 0 && (
+            <div className="bill-pay">
+              <PaymentTag mode={bill.paymentMode} />
+            </div>
+          )}
         </div>
         <button className="btn btn-light btn-block" onClick={() => void shareText(billText(bill))}>
           <IconShare /> {t('shareBill')}

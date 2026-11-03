@@ -72,11 +72,19 @@ export interface BillLine {
   lineTotalPaise: number;
 }
 
-/** Expired units taken back and replaced with fresh ones (no money). */
+/**
+ * Expired units taken back. Their value (quantity × rate − the shop's discount) is taken off the bill.
+ * Bills made by older app versions have no rate here: those returns cost nothing.
+ */
 export interface ReturnLine {
   productId: number;
   name: string;
   quantity: number;
+  unitPricePaise?: number;
+  discount?: DiscountRule | null;
+  discountPaise?: number;
+  /** Taken off the bill for these units. */
+  creditPaise?: number;
 }
 
 /** A bill saved on the phone that has not reached the server yet. */
@@ -93,8 +101,11 @@ export interface PendingSale {
   items: BillLine[];
   /** Missing in bills saved by older app versions. */
   returns?: ReturnLine[];
+  /** Net amount: what was given minus the returns (below zero = the shop gets money back). */
   totalPaise: number;
   totalQuantity: number;
+  /** Value of the returns (missing in bills saved by older app versions: 0). */
+  returnedPaise?: number;
   attempts: number;
   lastError?: string;
   /** The server refused this bill (not a network problem). Needs the owner's help. */
@@ -116,6 +127,7 @@ export interface ServerSale {
   totalQuantity: number;
   discountPaise?: number;
   returnedQuantity?: number;
+  returnedPaise?: number;
   status: 'completed' | 'cancelled';
   cancelledBy: 'driver' | 'admin' | null;
   cancelReason: string | null;
@@ -129,7 +141,16 @@ export interface ServerSale {
     discountPaise?: number;
     lineTotalPaise: number;
   }>;
-  returns?: Array<{ productId: number; productName: string; quantity: number }>;
+  returns?: Array<{
+    productId: number;
+    productName: string;
+    quantity: number;
+    unitPricePaise?: number;
+    discountKind?: DiscountRule['kind'] | null;
+    discountValue?: number | null;
+    discountPaise?: number;
+    creditPaise?: number;
+  }>;
 }
 
 export interface DayHistory {
@@ -151,8 +172,11 @@ export interface BillView {
   soldAt: string;
   saleDate: string;
   paymentMode: PaymentMode;
+  /** Net amount (given − returned). */
   totalPaise: number;
   totalQuantity: number;
+  /** Value of the returns, already taken off totalPaise. */
+  returnedPaise: number;
   items: BillLine[];
   returns: ReturnLine[];
   state: BillState;

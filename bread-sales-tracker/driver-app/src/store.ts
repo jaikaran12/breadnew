@@ -207,7 +207,15 @@ function linesFromServer(sale: ServerSale): BillLine[] {
 }
 
 function returnsFromServer(sale: ServerSale): ReturnLine[] {
-  return (sale.returns ?? []).map((r) => ({ productId: r.productId, name: r.productName, quantity: r.quantity }));
+  return (sale.returns ?? []).map((r) => ({
+    productId: r.productId,
+    name: r.productName,
+    quantity: r.quantity,
+    unitPricePaise: r.unitPricePaise,
+    discount: r.discountKind && r.discountValue ? { kind: r.discountKind, value: r.discountValue } : null,
+    discountPaise: r.discountPaise ?? 0,
+    creditPaise: r.creditPaise ?? 0,
+  }));
 }
 
 /** All bills of a day for the logged-in driver: sent ones from the server plus ones still on the phone. */
@@ -228,6 +236,7 @@ export function billsForDate(s: State, date: string): BillView[] {
       paymentMode: o.paymentMode,
       totalPaise: o.totalPaise,
       totalQuantity: o.totalQuantity,
+      returnedPaise: o.returnedPaise ?? 0,
       items: o.items,
       returns: o.returns ?? [],
       state: o.rejected ? 'rejected' : 'pending',
@@ -244,6 +253,7 @@ export function billsForDate(s: State, date: string): BillView[] {
     paymentMode: x.paymentMode,
     totalPaise: x.totalPaise,
     totalQuantity: x.totalQuantity,
+    returnedPaise: x.returnedPaise ?? 0,
     items: linesFromServer(x),
     returns: returnsFromServer(x),
     state: x.status === 'cancelled' ? 'cancelled' : 'sent',
@@ -262,8 +272,9 @@ export function findBill(s: State, key: string): BillView | undefined {
 }
 
 export interface Totals {
-  /** Bills with something sold (a visit that only replaced expired bread is not counted). */
+  /** Bills with something given (a visit where expired items were only taken back is not counted). */
   bills: number;
+  /** Net amounts (given − returned); cash, UPI and udhaar add up to it. */
   totalPaise: number;
   cashPaise: number;
   upiPaise: number;
@@ -271,16 +282,19 @@ export interface Totals {
   quantity: number;
   /** Expired units taken back. */
   returned: number;
+  /** Their value, already taken off the amounts above. */
+  returnedPaise: number;
 }
 
 export function summarize(bills: BillView[]): Totals {
-  const t: Totals = { bills: 0, totalPaise: 0, cashPaise: 0, upiPaise: 0, creditPaise: 0, quantity: 0, returned: 0 };
+  const t: Totals = { bills: 0, totalPaise: 0, cashPaise: 0, upiPaise: 0, creditPaise: 0, quantity: 0, returned: 0, returnedPaise: 0 };
   for (const b of bills) {
     if (b.state === 'cancelled') continue;
     if (b.totalQuantity > 0) t.bills++;
     t.totalPaise += b.totalPaise;
     t.quantity += b.totalQuantity;
-    t.returned += b.returns.reduce((acc, r) => acc + r.quantity, 0);
+    t.returned += returnsCount(b.returns);
+    t.returnedPaise += b.returnedPaise;
     if (b.paymentMode === 'cash') t.cashPaise += b.totalPaise;
     if (b.paymentMode === 'upi') t.upiPaise += b.totalPaise;
     if (b.paymentMode === 'credit') t.creditPaise += b.totalPaise;
@@ -335,11 +349,49 @@ export function draftLines(s: State): BillLine[] {
   return lines;
 }
 
+/** Expired units taken back, valued like a sold line: quantity × rate minus the shop's discount. */
+export function makeReturn(productId: number, name: string, unitPricePaise: number, quantity: number, discount: DiscountRule | null): ReturnLine {
+  const discountPaise = lineDiscount(discount, unitPricePaise, quantity);
+  return { productId, name, quantity, unitPricePaise, discount, discountPaise, creditPaise: unitPricePaise * quantity - discountPaise };
+}
+
 /** Expired items taken back in the bill being made. */
 export function draftReturns(s: State): ReturnLine[] {
   if (!s.draft || !s.catalog) return [];
   const ret = s.draft.ret ?? {};
-  return s.catalog.products.filter((p) => (ret[p.id] ?? 0) > 0).map((p) => ({ productId: p.id, name: p.name, quantity: ret[p.id] }));
+  const returns: ReturnLine[] = [];
+  for (const p of s.catalog.products) {
+    const q = ret[p.id] ?? 0;
+    if (q > 0) returns.push(makeReturn(p.id, p.name, p.pricePaise, q, discountFor(s, s.draft.storeId, p.id)));
+  }
+  return returns;
+}
+
+export interface BillTotals {
+  /** What was given, after discounts. */
+  givenPaise: number;
+  /** Units given. */
+  quantity: number;
+  discountPaise: number;
+  /** Value of the expired units taken back. */
+  returnedPaise: number;
+  returnedQuantity: number;
+  /** Net amount the shop pays: given − returned (below zero = the shop gets money back). */
+  totalPaise: number;
+}
+
+/** Given, returned and the net amount of a bill (same arithmetic as the server). */
+export function billTotals(lines: BillLine[], returns: ReturnLine[]): BillTotals {
+  const given = linesTotal(lines);
+  const returnedPaise = returns.reduce((acc, r) => acc + (r.creditPaise ?? 0), 0);
+  return {
+    givenPaise: given.totalPaise,
+    quantity: given.quantity,
+    discountPaise: given.discountPaise,
+    returnedPaise,
+    returnedQuantity: returnsCount(returns),
+    totalPaise: given.totalPaise - returnedPaise,
+  };
 }
 
 export function linesTotal(lines: BillLine[]): { totalPaise: number; quantity: number; discountPaise: number } {
@@ -471,7 +523,12 @@ export function syncNow(): Promise<void> {
             unitPricePaise: i.unitPricePaise,
             ...(i.discount ? { discount: i.discount } : {}),
           })),
-          returns: (sale.returns ?? []).map((r) => ({ productId: r.productId, quantity: r.quantity })),
+          // Returns saved by an older app version have no rate: they cost nothing, so none is sent.
+          returns: (sale.returns ?? []).map((r) =>
+            r.unitPricePaise === undefined
+              ? { productId: r.productId, quantity: r.quantity }
+              : { productId: r.productId, quantity: r.quantity, unitPricePaise: r.unitPricePaise, ...(r.discount ? { discount: r.discount } : {}) },
+          ),
           totalPaise: sale.totalPaise,
         });
         setState((s) => ({
@@ -655,7 +712,7 @@ export const actions = {
     const lines = draftLines(state);
     const returns = draftReturns(state);
     if (lines.length === 0 && returns.length === 0) return null;
-    const { totalPaise, quantity } = linesTotal(lines);
+    const { totalPaise, quantity, returnedPaise } = billTotals(lines, returns);
     const now = new Date();
     const sale: PendingSale = {
       clientId: uuid(),
@@ -671,6 +728,7 @@ export const actions = {
       returns,
       totalPaise,
       totalQuantity: quantity,
+      returnedPaise,
       attempts: 0,
     };
     setState((s) => ({ outbox: [...s.outbox, sale], draft: null }));

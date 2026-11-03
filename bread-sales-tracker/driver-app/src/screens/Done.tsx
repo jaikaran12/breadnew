@@ -1,4 +1,5 @@
 import { billText } from '../billText';
+import { netLabel, returnsCounted } from '../components/Bill';
 import { IconCheck, IconClock, IconHome, IconNext, IconReturn, IconShare } from '../icons';
 import { rupees } from '../money';
 import { shareText } from '../device';
@@ -26,14 +27,15 @@ export function DoneScreen(props: { billKey: string }) {
         <h1 className="done-title">{bill && bill.items.length === 0 ? t('returnsSaved') : t('billSaved')}</h1>
         {bill && (
           <>
-            <div className="done-amount" data-testid="done-total">
-              {rupees(bill.totalPaise)}
+            {returnsCounted(bill.returns) && <div className="done-label">{netLabel(bill.totalPaise).label}</div>}
+            <div className={`done-amount ${bill.totalPaise < 0 ? 'amount-back' : ''}`} data-testid="done-total">
+              {returnsCounted(bill.returns) ? netLabel(bill.totalPaise).amount : rupees(bill.totalPaise)}
             </div>
             <div className="done-shop">{bill.storeName}</div>
             {bill.returns.length > 0 && (
               <div className="done-returns" data-testid="done-returns">
                 <IconReturn size={20} /> {t('returnedPcs', { n: bill.returns.reduce((acc, r) => acc + r.quantity, 0) })} ·{' '}
-                {t('noCharge')}
+                {bill.returnedPaise > 0 ? `−${rupees(bill.returnedPaise)}` : t('noCharge')}
               </div>
             )}
             {bill.state === 'sent' ? (

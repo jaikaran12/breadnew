@@ -77,7 +77,9 @@ export const api = {
     soldAt: string;
     paymentMode: PaymentMode;
     items: Array<{ productId: number; quantity: number; unitPricePaise: number; discount?: DiscountRule }>;
-    returns: Array<{ productId: number; quantity: number }>;
+    /** No rate = a return saved by an older app version (it costs nothing). */
+    returns: Array<{ productId: number; quantity: number; unitPricePaise?: number; discount?: DiscountRule }>;
+    /** Net amount: given − returned. */
     totalPaise: number;
   }) => request<{ sale: ServerSale; created: boolean; catalogVersion: string }>('POST', '/api/driver/sales', sale),
   sales: (date: string) =>

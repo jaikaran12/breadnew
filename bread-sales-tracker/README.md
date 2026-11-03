@@ -30,10 +30,10 @@ A simple system for a bakery that sells bread to kirana shops from delivery auto
 | Home | Today's total, **New bill**, **My bills**. Shows if any bills are waiting for internet |
 | Area → Shop | Big area buttons, then the shops of that area (with search). Shops already billed today get a ✓ and the amount. The search box on the area screen searches all shops |
 | Items | All products with colour, name, local name and price. **+ / −** buttons, or tap the number to type it on a calculator pad (e.g. 24). The total updates live at the bottom. Shops with special rates get their discount automatically (the normal price is struck out, e.g. “5% off”) |
-| Expired return | A second tab on the same screen: count the **expired items taken back and replaced with fresh ones**, with the same + / − buttons (amber, “No charge”). It does not change the money. A visit where only expired bread is replaced (nothing sold) is saved the same way |
-| Check bill | Bill table (item, qty, rate, amount) with each discount, the total in large digits, the expired items replaced, and how the shop paid: **Cash / UPI / Udhaar** |
+| Expired return | A second tab on the same screen: count the **expired items taken back**, with the same + / − buttons (amber). Each one is valued at that shop's rate (after its discount) and **comes off the bill**. Fresh pieces given in their place go on the Sale tab as usual, so swapping one expired loaf for a fresh one comes to ₹0. The bar at the bottom shows the **Net amount** |
+| Check bill | Bill table (item, qty, rate, amount) with each discount, then the expired items taken back (minus amounts), then **Given − Returned = Net amount** in large digits, and how the shop paid: **Cash / UPI / Udhaar**. Nothing to pay (a pure swap) skips the payment question; if the returns are worth more than what was given, the bill says **Give back to shop ₹…** and asks how the money was given back |
 | Saved | Big ✓ and the amount. **Share bill** on WhatsApp, **Next shop** |
-| My bills | Bills for today, yesterday or any date. Shows **Cash to hand over**, UPI, udhaar and the expired items taken back. Each bill can be opened and shared, and cancelled within 30 minutes if it was a mistake |
+| My bills | Bills for today, yesterday or any date. Shows **Cash to hand over** (net of money given back), UPI, udhaar and the expired items taken back with their value. Each bill can be opened and shared, and cancelled within 30 minutes if it was a mistake |
 | Add shop | If a new kirana shop wants bread, the driver can add it on the spot (marked “added by driver” on your website) |
 
 **Works without internet.** Bills are saved on the phone first and sent automatically when the internet comes
@@ -49,8 +49,8 @@ All money is calculated in whole paise, and the server checks every bill total a
 | --- | --- |
 | **Dashboard** | Today's sales, live (refreshes every minute): total, bills, shops visited, cash / UPI / udhaar, per driver, per area, products sold, last 14 days, latest bills |
 | **Sales (bills)** | Every bill with filters (dates, driver, area, payment, cancelled, shop name or bill number). Open a bill to see the items; cancel a wrong bill (with a reason) or restore it. Download as CSV (opens in Excel) |
-| **Cash tally** | At the end of the day: for each driver, **cash expected** (cash bills only), UPI, udhaar and how many expired items they should bring back. Type the cash handed over and the page shows **Short ₹… / Extra ₹… / Matches**. If a late bill arrives after you tallied, the page warns you. After you tally a day, the driver can no longer cancel bills from that day on the phone |
-| **Reports** | Any date range, grouped by product, shop, area, driver or day, with the discount given and the expired items taken back, and CSV download |
+| **Cash tally** | At the end of the day: for each driver, **cash expected** (cash bills only, after any money given back to shops), UPI, udhaar and how many expired items they should bring back (and their value taken off bills). Type the cash handed over and the page shows **Short ₹… / Extra ₹… / Matches**. If a late bill arrives after you tallied, the page warns you. After you tally a day, the driver can no longer cancel bills from that day on the phone |
+| **Reports** | Any date range, grouped by product, shop, area, driver or day. Amounts are **net** (given − expired taken back), with the discount given and the expired items taken back (units and ₹), and CSV download |
 | **Shops (kirana)** | Search, filter by area, find shops with no bill for 3/7/30 days, add/edit/remove shops, see each shop's purchases (what they buy, average bill, udhaar, recent bills). **Import your whole shop list from Excel** |
 | **Areas** | Add/rename areas, set their order in the app |
 | **Products & prices** | Add products, change prices (with price history), colours, order in the app, hide products |
@@ -260,9 +260,10 @@ screen**. It is the same app.
 5. **अगली दुकान** दबाएँ। इंटरनेट न हो तो भी बिल फ़ोन में सेव रहता है और नेट आते ही अपने आप चला जाता है।
 6. शाम को **मेरे बिल** खोलें — **“जमा करने का कैश”** उतना कैश मालिक को देना है।
 7. गलती से बिल बन गया? **मेरे बिल** → बिल खोलें → **यह बिल रद्द करें** (30 मिनट के अंदर), फिर सही बिल बनाएँ।
-8. **एक्सपायरी माल:** दुकान में एक्सपायरी ब्रेड मिले तो उसे वापस लें और नई दें। बिल बनाते समय ऊपर
-   **एक्सपायरी वापसी** दबाएँ और वापस ली गई गिनती डालें — इसके पैसे नहीं लगते। अगर कुछ बेचा नहीं, सिर्फ़ बदला,
-   तब भी ऐसे ही गिनती डालकर **बिल सेव करें**। शाम को एक्सपायरी माल मालिक को दें।
+8. **एक्सपायरी माल:** दुकान में एक्सपायरी ब्रेड मिले तो उसे वापस लें। बिल बनाते समय ऊपर **एक्सपायरी वापसी**
+   दबाएँ और वापस ली गई गिनती डालें — उसकी कीमत बिल से घट जाती है। जो नई ब्रेड उसकी जगह दी, वह **बिक्री** में
+   डालें (1 एक्सपायरी के बदले 1 नई = ₹0)। बिल में **दिया माल − वापस माल = नेट रकम** दिखती है; दुकान नेट रकम देती है।
+   अगर वापसी ज़्यादा हो तो बिल **दुकान को वापस दें ₹…** दिखाएगा। शाम को एक्सपायरी माल मालिक को दें।
 9. कुछ दुकानों को **खास रेट (छूट)** मिलता है — ऐप उसे अपने आप लगाता है। आपको कुछ नहीं करना, बस कुल रकम लें।
 
 ---
@@ -278,9 +279,13 @@ screen**. It is the same app.
 * **Price change?** Edit the product. Phones pick up the new price within a few minutes when online. Bills
   made earlier keep their old price. A bill made with an old price list is marked “Old rate”. A % discount
   follows the new price; a “₹ off each” discount stays the same amount.
-* **Expired bread:** the **Dashboard** lists what was taken back today, **Cash tally** shows how many expired
-  pieces each driver should bring back, and each shop's page shows what it returned in the last 30 days (to
-  spot shops that are sent too much).
+* **Expired bread:** each piece taken back comes off its bill at the shop's rate (after its discount), so
+  the bill shows **Given − Returned = Net amount** and every total (cash, reports, tally) is net. The fresh
+  pieces given in exchange are billed on the Sale tab, so a one-for-one swap comes to ₹0; if a shop returns
+  more than it takes, the bill says **Give back to shop ₹…**. The **Dashboard** lists what was taken back today
+  and its value, **Cash tally** shows how many expired pieces each driver should bring back, and each shop's
+  page shows what it returned in the last 30 days (to spot shops that are sent too much). Returns recorded
+  before this change (3 Nov 2026) were free swaps and stay “no charge”.
 * **Watch for:** many “Cancelled by driver” bills, shops not visited for days (Shops → “No bill for 7+
   days”), and differences in the cash tally.
 
@@ -378,7 +383,7 @@ All amounts are integers in **paise** (₹42.50 = `4250`). Dates are `YYYY-MM-DD
 | --- | --- | --- |
 | `POST /api/driver/login` | driver | `{phone, pin}` → `{token, driver}` |
 | `GET /api/driver/catalog` | driver | areas, shops, products with prices, business info |
-| `POST /api/driver/sales` | driver | save a bill `{clientId, storeId, soldAt, paymentMode, items[{productId, quantity, unitPricePaise}], totalPaise}`. Sending the same `clientId` again returns the saved bill |
+| `POST /api/driver/sales` | driver | save a bill `{clientId, storeId, soldAt, paymentMode, items[{productId, quantity, unitPricePaise, discount?}], returns?[{productId, quantity, unitPricePaise, discount?}], totalPaise}`; `totalPaise` is the net amount (given − returned, may be below zero). Sending the same `clientId` again returns the saved bill |
 | `GET /api/driver/sales?date=` | driver | own bills for a day |
 | `POST /api/driver/sales/:id/cancel` | driver | cancel own bill (time limit, not after the day is tallied) |
 | `POST /api/driver/stores` | driver | add a shop |

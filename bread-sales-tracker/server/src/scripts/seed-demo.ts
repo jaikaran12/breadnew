@@ -149,27 +149,35 @@ async function addDemoData(db: Db, timeZone: string) {
           const qty = 1 + Math.floor(rand() * (p.price < 2000 ? 12 : 6));
           chosen.set(p.id, { ...p, qty });
         }
-        // About 1 visit in 25 only replaces expired bread; about 1 in 6 bills also takes some back.
-        const returnsOnly = rand() < 0.04;
-        const lines = returnsOnly
-          ? []
-          : [...chosen.values()].map((l) => {
-              const rule = discounts.get(`${store.id}:${l.id}`) ?? null;
-              const discount = lineDiscount(rule, l.price, l.qty);
-              return { ...l, rule, discount, total: l.qty * l.price - discount };
-            });
+        // About 1 visit in 25 only swaps expired bread for fresh; about 1 in 6 bills also takes some back.
+        const swapOnly = rand() < 0.04;
+        if (swapOnly) chosen.clear();
         const returned = new Map<number, { id: number; name: string; price: number; qty: number }>();
-        if (returnsOnly || rand() < 0.17) {
+        if (swapOnly || rand() < 0.17) {
           const count = 1 + Math.floor(rand() * 2);
           for (let k = 0; k < count; k++) {
             const p = products[Math.floor(Math.pow(rand(), 1.4) * products.length)];
             returned.set(p.id, { ...p, qty: 1 + Math.floor(rand() * 3) });
           }
         }
-        const total = lines.reduce((acc, l) => acc + l.total, 0);
+        // The fresh units given in place of the expired ones are on the bill too, so a swap comes to ₹0.
+        for (const ret of returned.values()) chosen.set(ret.id, { ...ret, qty: (chosen.get(ret.id)?.qty ?? 0) + ret.qty });
+        const ruleFor = (productId: number) => discounts.get(`${store.id}:${productId}`) ?? null;
+        const lines = [...chosen.values()].map((l) => {
+          const rule = ruleFor(l.id);
+          const discount = lineDiscount(rule, l.price, l.qty);
+          return { ...l, rule, discount, total: l.qty * l.price - discount };
+        });
+        const credits = [...returned.values()].map((x) => {
+          const rule = ruleFor(x.id);
+          const discount = lineDiscount(rule, x.price, x.qty);
+          return { ...x, rule, discount, credit: x.qty * x.price - discount };
+        });
+        const returnedPaise = credits.reduce((acc, x) => acc + x.credit, 0);
+        const total = lines.reduce((acc, l) => acc + l.total, 0) - returnedPaise;
         const qty = lines.reduce((acc, l) => acc + l.qty, 0);
         const discountTotal = lines.reduce((acc, l) => acc + l.discount, 0);
-        const returnedQty = [...returned.values()].reduce((acc, r) => acc + r.qty, 0);
+        const returnedQty = credits.reduce((acc, x) => acc + x.qty, 0);
         const r = rand();
         const mode = r < 0.72 ? 'cash' : r < 0.92 ? 'upi' : 'credit';
         const hh = String(Math.floor(minute / 60)).padStart(2, '0');
@@ -177,10 +185,10 @@ async function addDemoData(db: Db, timeZone: string) {
         const soldAt = new Date(`${date}T${hh}:${mm}:00+05:30`).toISOString();
         const clientId = crypto.randomUUID();
         sales.push({
-          sql: `INSERT INTO sales (client_id, driver_id, store_id, area_id, sold_at, sale_date, payment_mode,
-                                   total_paise, total_quantity, discount_paise, returned_quantity, device_sold_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?5)`,
-          params: [clientId, driver.id, store.id, store.areaId, soldAt, date, mode, total, qty, discountTotal, returnedQty],
+          sql: `INSERT INTO sales (client_id, driver_id, store_id, area_id, sold_at, sale_date, payment_mode, total_paise,
+                                   total_quantity, discount_paise, returned_quantity, returned_paise, device_sold_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?5)`,
+          params: [clientId, driver.id, store.id, store.areaId, soldAt, date, mode, total, qty, discountTotal, returnedQty, returnedPaise],
         });
         for (const l of lines) {
           sales.push({
@@ -190,11 +198,12 @@ async function addDemoData(db: Db, timeZone: string) {
             params: [clientId, l.id, l.name, l.price, l.qty, l.rule?.kind ?? null, l.rule?.value ?? null, l.discount, l.total],
           });
         }
-        for (const ret of returned.values()) {
+        for (const x of credits) {
           sales.push({
-            sql: `INSERT INTO sale_returns (sale_id, product_id, product_name, quantity, unit_price_paise)
-                  VALUES ((SELECT id FROM sales WHERE client_id = ?1), ?2, ?3, ?4, ?5)`,
-            params: [clientId, ret.id, ret.name, ret.qty, ret.price],
+            sql: `INSERT INTO sale_returns (sale_id, product_id, product_name, quantity, unit_price_paise, list_price_paise,
+                                            discount_kind, discount_value, discount_paise, list_discount_paise, credit_paise)
+                  VALUES ((SELECT id FROM sales WHERE client_id = ?1), ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?8, ?9)`,
+            params: [clientId, x.id, x.name, x.qty, x.price, x.rule?.kind ?? null, x.rule?.value ?? null, x.discount, x.credit],
           });
         }
       }

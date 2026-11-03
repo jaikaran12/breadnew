@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { productCode } from './components/ui';
 import { rupees } from './money';
-import { billsForDate, getState, linesTotal, summarize, draftLines, draftReturns, __setStateForTests } from './store';
+import { billText } from './billText';
+import { returnsCounted } from './components/Bill';
+import { billTotals, billsForDate, getState, linesTotal, summarize, draftLines, draftReturns, __setStateForTests } from './store';
 import type { Catalog, PendingSale, ServerSale } from './types';
 
 const catalog: Catalog = {
@@ -28,7 +30,7 @@ describe('money', () => {
     expect(rupees(4000)).toBe('₹40');
     expect(rupees(4250)).toBe('₹42.50');
     expect(rupees(12345600)).toBe('₹1,23,456');
-    expect(rupees(-500)).toBe('-₹5');
+    expect(rupees(-500)).toBe('−₹5');
   });
 });
 
@@ -101,7 +103,7 @@ describe('bill totals', () => {
       ['s2', 'cancelled'],
       ['s1', 'sent'],
     ]);
-    expect(summarize(bills)).toEqual({ bills: 3, totalPaise: 15500, cashPaise: 8000, upiPaise: 5000, creditPaise: 2500, quantity: 4, returned: 0 });
+    expect(summarize(bills)).toEqual({ bills: 3, totalPaise: 15500, cashPaise: 8000, upiPaise: 5000, creditPaise: 2500, quantity: 4, returned: 0, returnedPaise: 0 });
   });
 });
 
@@ -141,6 +143,8 @@ describe('bill history cache', () => {
 });
 
 describe('shop discounts and expired returns on the phone', () => {
+  // The app starts in Hindi; these tests read the English bill text.
+  beforeEach(() => __setStateForTests({ lang: 'en' }));
   const withDiscounts: Catalog = {
     ...catalog,
     discounts: [
@@ -175,17 +179,33 @@ describe('shop discounts and expired returns on the phone', () => {
     ]);
     expect(linesTotal(lines)).toEqual({ totalPaise: 56150, quantity: 15, discountPaise: 2600 });
 
-    // Expired returns go in their own list and do not change the money
+    // Expired returns go in their own list, valued at the shop's own rate, and come off the bill
     actions.setMode('return');
     actions.setQty(1, 2);
     actions.setQty(3, 1);
     actions.setQty(3, 0);
     actions.setQty(2, 4);
-    expect(draftReturns(getState())).toEqual([
-      { productId: 1, name: 'Milk Bread 400g', quantity: 2 },
-      { productId: 2, name: 'Brown Bread', quantity: 4 },
+    // Milk 2 × ₹40 − 5% = ₹76; Brown 4 × ₹42.50 − ₹2 each = ₹162
+    expect(draftReturns(getState()).map((r) => [r.productId, r.quantity, r.unitPricePaise, r.discountPaise, r.creditPaise])).toEqual([
+      [1, 2, 4000, 400, 7600],
+      [2, 4, 4250, 800, 16200],
     ]);
     expect(linesTotal(draftLines(getState())).totalPaise).toBe(56150);
+    // Given ₹561.50 − returned ₹238 = net ₹323.50
+    expect(billTotals(draftLines(getState()), draftReturns(getState()))).toEqual({
+      givenPaise: 56150,
+      quantity: 15,
+      discountPaise: 2600,
+      returnedPaise: 23800,
+      returnedQuantity: 6,
+      totalPaise: 32350,
+    });
+    // Swapping one expired Brown Bread for a fresh one comes to ₹0
+    const swap = billTotals(
+      [{ productId: 2, name: 'Brown Bread', unitPricePaise: 4250, quantity: 1, discount: { kind: 'amount', value: 200 }, discountPaise: 200, lineTotalPaise: 4050 }],
+      draftReturns(getState()).filter((r) => r.productId === 2).map((r) => ({ ...r, quantity: 1, discountPaise: 200, creditPaise: 4050 })),
+    );
+    expect(swap.totalPaise).toBe(0);
     // "Clear" in return mode only clears the returns
     actions.clearQty();
     expect(draftReturns(getState())).toEqual([]);
@@ -201,6 +221,7 @@ describe('shop discounts and expired returns on the phone', () => {
       auth: { token: 't', driver: { id: 5, name: 'Ramesh', phone: '9000000001' } },
       draft: { storeId: 7, storeName: 'Sharma Kirana', areaId: 1, areaName: 'Gandhi Nagar', qty: {}, ret: { 3: 2 }, mode: 'return', paymentMode: 'cash' },
     });
+    // Nothing given, 2 × ₹30 taken back: the shop gets ₹60 back
     const sent: unknown[] = [];
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: string, init?: RequestInit) => {
@@ -220,14 +241,17 @@ describe('shop discounts and expired returns on the phone', () => {
             soldAt: body.soldAt,
             saleDate: getState().outbox[0]?.saleDate ?? '2026-10-31',
             paymentMode: 'cash',
-            totalPaise: 0,
+            totalPaise: -6000,
             totalQuantity: 0,
             returnedQuantity: 2,
+            returnedPaise: 6000,
             status: 'completed',
             cancelledBy: null,
             cancelReason: null,
             items: [],
-            returns: [{ productId: 3, productName: 'Pav 6 pcs', quantity: 2 }],
+            returns: [
+              { productId: 3, productName: 'Pav 6 pcs', quantity: 2, unitPricePaise: 3000, discountKind: null, discountValue: null, discountPaise: 0, creditPaise: 6000 },
+            ],
           },
         }),
         { status: 201, headers: { 'Content-Type': 'application/json' } },
@@ -241,12 +265,22 @@ describe('shop discounts and expired returns on the phone', () => {
       globalThis.fetch = realFetch;
     }
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ storeId: 7, items: [], returns: [{ productId: 3, quantity: 2 }], totalPaise: 0 });
+    expect(sent[0]).toEqual(expect.objectContaining({ storeId: 7, items: [], returns: [{ productId: 3, quantity: 2, unitPricePaise: 3000 }], totalPaise: -6000 }));
     expect(getState().outbox).toEqual([]);
     const day = Object.values(getState().history)[0];
     const bills = billsForDate(getState(), day.date);
-    expect(bills[0].returns).toEqual([{ productId: 3, name: 'Pav 6 pcs', quantity: 2 }]);
-    expect(summarize(bills)).toMatchObject({ bills: 0, totalPaise: 0, returned: 2 });
+    expect(bills[0].returns).toEqual([
+      { productId: 3, name: 'Pav 6 pcs', quantity: 2, unitPricePaise: 3000, discount: null, discountPaise: 0, creditPaise: 6000 },
+    ]);
+    expect(bills[0]).toMatchObject({ totalPaise: -6000, returnedPaise: 6000 });
+    expect(summarize(bills)).toMatchObject({ bills: 0, totalPaise: -6000, cashPaise: -6000, returned: 2, returnedPaise: 6000 });
+
+    // The bill to share says the shop gets the money back
+    const text = billText(bills[0]);
+    expect(text).toContain('Expired taken back');
+    expect(text).toContain('Pav 6 pcs\n   2 × ₹30 = −₹60');
+    expect(text).toContain('Returned (2 pcs): −₹60');
+    expect(text).toContain('*Give back to shop: ₹60*  (Cash)');
   });
 
   it('sends the discount it used with each bill line', async () => {
@@ -268,13 +302,67 @@ describe('shop discounts and expired returns on the phone', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+    // Given 3 × ₹40 − 5% = ₹114; back 1 × ₹40 − 5% = ₹38 → net ₹76
     expect(bodies[0]).toMatchObject({
       items: [{ productId: 1, quantity: 3, unitPricePaise: 4000, discount: { kind: 'percent', value: 500 } }],
-      returns: [{ productId: 1, quantity: 1 }],
-      totalPaise: 11400,
+      returns: [{ productId: 1, quantity: 1, unitPricePaise: 4000, discount: { kind: 'percent', value: 500 } }],
+      totalPaise: 7600,
     });
     // The server was down: the bill stays on the phone with its returns
-    expect(getState().outbox[0]).toMatchObject({ totalPaise: 11400, returns: [{ productId: 1, quantity: 1 }] });
+    expect(getState().outbox[0]).toMatchObject({ totalPaise: 7600, returnedPaise: 3800, returns: [{ productId: 1, quantity: 1, creditPaise: 3800 }] });
+
+    const bill = billsForDate(getState(), getState().outbox[0].saleDate)[0];
+    expect(returnsCounted(bill.returns)).toBe(true);
+    const text = billText(bill);
+    expect(text).toContain('Given (3 pcs): ₹114');
+    expect(text).toContain('Milk Bread 400g\n   1 × ₹40 (5% off) = −₹38');
+    expect(text).toContain('Returned (1 pcs): −₹38');
+    expect(text).toContain('*Net amount: ₹76*  (UPI)');
+  });
+
+  it('sends returns saved by the older app version without a rate (they cost nothing)', async () => {
+    const { actions } = await import('./store');
+    __setStateForTests({
+      catalog: withDiscounts,
+      history: {},
+      auth: { token: 't', driver: { id: 5, name: 'Ramesh', phone: '9000000001' } },
+      outbox: [
+        {
+          clientId: 'old-2',
+          driverId: 5,
+          storeId: 7,
+          storeName: 'Sharma Kirana',
+          areaId: 1,
+          areaName: 'Gandhi Nagar',
+          soldAt: '2026-10-31T09:00:00Z',
+          saleDate: '2026-10-31',
+          paymentMode: 'cash',
+          items: [{ productId: 1, name: 'Milk Bread 400g', unitPricePaise: 4000, quantity: 2, lineTotalPaise: 8000 }],
+          returns: [{ productId: 3, name: 'Pav 6 pcs', quantity: 1 }],
+          totalPaise: 8000,
+          totalQuantity: 2,
+          attempts: 0,
+        },
+      ],
+    });
+    const before = billsForDate(getState(), '2026-10-31')[0];
+    expect(before).toMatchObject({ totalPaise: 8000, returnedPaise: 0 });
+    expect(returnsCounted(before.returns)).toBe(false);
+    expect(billText(before)).toContain('*Expired taken back* (No charge)');
+
+    const bodies: Array<{ returns: unknown[]; totalPaise: number }> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ error: 'down' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      await actions.syncNow();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(bodies[0]).toMatchObject({ returns: [{ productId: 3, quantity: 1 }], totalPaise: 8000 });
+    expect(bodies[0].returns[0]).not.toHaveProperty('unitPricePaise');
   });
 
   it('still reads bills saved by the older app version (no returns, no discounts)', () => {

@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { DiscountEditor } from '../components/DiscountEditor';
 import { SaleModal } from '../components/SaleModal';
-import { Badge, Card, Empty, ErrorBox, InlineBar, Loading, PageHeader, PaymentBadge, Stat } from '../components/ui';
+import { Badge, Card, Empty, ErrorBox, InlineBar, Loading, PageHeader, BillBadges, Stat } from '../components/ui';
 import { ago, dateLabel, dateTime, discountLabel, num, priceAfter, rupees, time } from '../format';
 import type { Sale, Store } from '../types';
 import { StoreForm } from './Stores';
@@ -20,6 +20,7 @@ interface StoreDetail {
     credit30Paise: number;
     discount30Paise: number;
     returned30: number;
+    returned30Paise: number;
     firstSaleAt: string | null;
     lastSaleAt: string | null;
   };
@@ -83,7 +84,14 @@ export function StoreDetailPage() {
         {(stats.discount30Paise > 0 || discounts.length > 0) && (
           <Stat label="Discount given, 30 days" tone="green" value={rupees(stats.discount30Paise)} />
         )}
-        {stats.returned30 > 0 && <Stat label="Expired taken back, 30 days" tone="amber" value={`${num(stats.returned30)} pcs`} />}
+        {stats.returned30 > 0 && (
+          <Stat
+            label="Expired taken back, 30 days"
+            tone="amber"
+            value={`${num(stats.returned30)} pcs`}
+            hint={stats.returned30Paise > 0 ? `−${rupees(stats.returned30Paise)} on bills` : undefined}
+          />
+        )}
         <Stat label="Last bill" value={ago(stats.lastSaleAt)} hint={dateTime(stats.lastSaleAt)} />
         <Stat
           label="All time"
@@ -168,7 +176,7 @@ export function StoreDetailPage() {
                   <tr>
                     <th>Product</th>
                     <th className="num">Units</th>
-                    <th className="num">Worth (list price)</th>
+                    <th className="num">Taken off bills</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -176,7 +184,7 @@ export function StoreDetailPage() {
                     <tr key={r.productId}>
                       <td>{r.name}</td>
                       <td className="num strong">{num(r.quantity)}</td>
-                      <td className="num">{rupees(r.valuePaise)}</td>
+                      <td className="num">{r.valuePaise > 0 ? `−${rupees(r.valuePaise)}` : 'no charge'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -209,11 +217,11 @@ export function StoreDetailPage() {
                       </td>
                       <td>{s.driverName}</td>
                       <td>
-                        {s.totalQuantity > 0 && <PaymentBadge mode={s.paymentMode} />}{' '}
+                        <BillBadges sale={s} />{' '}
                         {s.returnedQuantity > 0 && <Badge tone="amber">↩ {s.returnedQuantity} returned</Badge>}{' '}
                         {s.status === 'cancelled' && <Badge tone="red">Cancelled</Badge>}
                       </td>
-                      <td className="num strong">{rupees(s.totalPaise)}</td>
+                      <td className={`num strong ${s.totalPaise < 0 ? 'amount-back' : ''}`}>{rupees(s.totalPaise)}</td>
                     </tr>
                   ))}
                 </tbody>

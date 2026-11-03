@@ -233,6 +233,7 @@ describe('driver bill list and cancel', () => {
       quantity: 14,
       discountPaise: 0,
       returnedQuantity: 0,
+      returnedPaise: 0,
       cancelledBills: 0,
     });
     expect(res.body.sales).toHaveLength(3);

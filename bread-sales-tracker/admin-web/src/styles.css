@@ -1312,6 +1312,39 @@ textarea:focus {
   background: transparent;
 }
 
+.net-box {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.net-box > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.net-box .net-return {
+  color: #78350f;
+}
+
+.net-box .net-total {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 2px solid var(--line-strong);
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.amount-back {
+  color: var(--red);
+}
+
 /* ---------- shop picker ---------- */
 .picker-search {
   width: 100%;

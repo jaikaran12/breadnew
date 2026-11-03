@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { SaleModal } from '../components/SaleModal';
-import { Badge, Card, DownloadButton, Empty, ErrorBox, Loading, PageHeader, Pager, PaymentBadge, RangePicker } from '../components/ui';
+import { Badge, BillBadges, Card, DownloadButton, Empty, ErrorBox, Loading, PageHeader, Pager, RangePicker } from '../components/ui';
 import { fetchSalesForExport, saveCsv, salesCsv } from '../exporting';
 import { dateTime, num, rupees, shortDate, time, todayIn } from '../format';
 import { useAreas, useDrivers } from '../lookups';
@@ -152,8 +152,9 @@ export function SalesPage() {
             <div className="stat-hint">{num(s.quantity)} units</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Total</div>
+            <div className="stat-label">{s.returnedPaise > 0 ? 'Net amount' : 'Total'}</div>
             <div className="stat-value">{rupees(s.totalPaise)}</div>
+            {s.returnedPaise > 0 && <div className="stat-hint">after −{rupees(s.returnedPaise)} expired taken back</div>}
           </div>
           <div className="stat stat-green">
             <div className="stat-label">Cash</div>
@@ -171,7 +172,9 @@ export function SalesPage() {
             <div className="stat stat-green">
               <div className="stat-label">Discount given</div>
               <div className="stat-value">{rupees(s.discountPaise)}</div>
-              <div className="stat-hint">↩ {num(s.returnedQuantity)} expired taken back</div>
+              <div className="stat-hint">
+                ↩ {num(s.returnedQuantity)} expired taken back{s.returnedPaise > 0 ? ` (−${rupees(s.returnedPaise)})` : ''}
+              </div>
             </div>
           )}
           <div className="stat stat-red">
@@ -220,7 +223,7 @@ export function SalesPage() {
                       {sale.returnedQuantity > 0 && <div className="small warn">↩ {num(sale.returnedQuantity)}</div>}
                     </td>
                     <td>
-                      {sale.totalQuantity > 0 ? <PaymentBadge mode={sale.paymentMode} /> : <Badge tone="amber">returns only</Badge>}{' '}
+                      <BillBadges sale={sale} />{' '}
                       {sale.discountPaise > 0 && <Badge tone="green">−{rupees(sale.discountPaise)}</Badge>}{' '}
                       {sale.status === 'cancelled' && (
                         <Badge tone="red" title={`${sale.cancelReason ?? ''} ${dateTime(sale.cancelledAt)}`}>
@@ -233,7 +236,10 @@ export function SalesPage() {
                         </Badge>
                       )}
                     </td>
-                    <td className="num strong">{rupees(sale.totalPaise)}</td>
+                    <td className={`num strong ${sale.totalPaise < 0 ? 'amount-back' : ''}`}>
+                      {rupees(sale.totalPaise)}
+                      {sale.returnedPaise > 0 && <div className="small muted">after −{rupees(sale.returnedPaise)} returned</div>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

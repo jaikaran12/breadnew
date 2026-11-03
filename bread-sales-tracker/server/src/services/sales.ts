@@ -13,10 +13,15 @@ export interface SaleItemInput {
   discount?: DiscountRule | null;
 }
 
-/** Expired units taken back and replaced with fresh ones (no money). */
+/**
+ * Expired units taken back. Their value (quantity × rate − the shop's discount) is taken off the bill.
+ * Older app versions send no rate: those returns cost nothing (they were swapped free of charge).
+ */
 export interface ReturnInput {
   productId: number;
   quantity: number;
+  unitPricePaise?: number;
+  discount?: DiscountRule | null;
 }
 
 export interface SaleInput {
@@ -26,7 +31,7 @@ export interface SaleInput {
   paymentMode: PaymentMode;
   items: SaleItemInput[];
   returns?: ReturnInput[];
-  /** Total shown on the phone. Must match the server's own calculation exactly. */
+  /** Net amount shown on the phone (given − returned). Must match the server's own calculation exactly. */
   totalPaise: number;
 }
 
@@ -49,6 +54,13 @@ export interface SaleReturn {
   productName: string;
   quantity: number;
   unitPricePaise: number;
+  listPricePaise: number;
+  discountKind: DiscountRule['kind'] | null;
+  discountValue: number | null;
+  discountPaise: number;
+  listDiscountPaise: number;
+  /** Taken off the bill for these units (0 for returns made with older app versions: they cost nothing). */
+  creditPaise: number;
 }
 
 export interface Sale {
@@ -63,13 +75,15 @@ export interface Sale {
   soldAt: string;
   saleDate: string;
   paymentMode: PaymentMode;
-  /** What the shop pays (after discounts). */
+  /** Net amount the shop pays: what was given (after discounts) minus the returns. Below zero = the shop gets money back. */
   totalPaise: number;
-  /** Units sold. */
+  /** Units given. */
   totalQuantity: number;
   discountPaise: number;
-  /** Expired units taken back and replaced. */
+  /** Expired units taken back. */
   returnedQuantity: number;
+  /** Value of the expired units taken back (already taken off totalPaise). */
+  returnedPaise: number;
   status: 'completed' | 'cancelled';
   cancelledAt: string | null;
   cancelledBy: 'driver' | 'admin' | null;
@@ -91,7 +105,7 @@ export const SALE_SELECT = `
          s.store_id AS "storeId", st.name AS "storeName", s.area_id AS "areaId", a.name AS "areaName",
          s.sold_at AS "soldAt", s.sale_date AS "saleDate", s.payment_mode AS "paymentMode",
          s.total_paise AS "totalPaise", s.total_quantity AS "totalQuantity", s.discount_paise AS "discountPaise",
-         s.returned_quantity AS "returnedQuantity", s.status,
+         s.returned_quantity AS "returnedQuantity", s.returned_paise AS "returnedPaise", s.status,
          s.cancelled_at AS "cancelledAt", s.cancelled_by AS "cancelledBy", s.cancel_reason AS "cancelReason",
          s.created_at AS "createdAt"
     FROM sales s
@@ -117,7 +131,9 @@ export async function attachItems(db: Db, sales: SaleRow[]): Promise<Sale[]> {
     ),
     db.all<SaleReturn & { saleId: number }>(
       `SELECT r.sale_id AS "saleId", r.product_id AS "productId", r.product_name AS "productName", r.quantity,
-              r.unit_price_paise AS "unitPricePaise"
+              r.unit_price_paise AS "unitPricePaise", r.list_price_paise AS "listPricePaise",
+              r.discount_kind AS "discountKind", r.discount_value AS "discountValue", r.discount_paise AS "discountPaise",
+              r.list_discount_paise AS "listDiscountPaise", r.credit_paise AS "creditPaise"
          FROM sale_returns r
          LEFT JOIN products p ON p.id = r.product_id
         WHERE r.sale_id IN (SELECT value FROM json_each(?1))
@@ -136,13 +152,17 @@ export async function attachItems(db: Db, sales: SaleRow[]): Promise<Sale[]> {
   };
   const itemsBySale = group(items);
   const returnsBySale = group(returns);
+  const offList = (l: { unitPricePaise: number; listPricePaise: number; discountPaise: number; listDiscountPaise: number }) =>
+    l.unitPricePaise !== l.listPricePaise || l.discountPaise !== l.listDiscountPaise;
   return sales.map((s) => {
     const saleItems = (itemsBySale.get(s.id) ?? []) as SaleItem[];
+    const saleReturns = (returnsBySale.get(s.id) ?? []) as SaleReturn[];
     return {
       ...s,
-      priceMismatch: saleItems.some((i) => i.unitPricePaise !== i.listPricePaise || i.discountPaise !== i.listDiscountPaise),
+      // Returns that cost nothing (older app versions) cannot be off the price list.
+      priceMismatch: saleItems.some(offList) || saleReturns.some((r) => r.creditPaise > 0 && offList(r)),
       items: saleItems,
-      returns: (returnsBySale.get(s.id) ?? []) as SaleReturn[],
+      returns: saleReturns,
     };
   });
 }
@@ -174,8 +194,9 @@ async function existingFor(db: Db, clientId: string, driverId: number): Promise<
 
 /**
  * Saves a bill sent by a driver's phone.
- * - Totals are recalculated here from quantity × rate − the shop's discount, in whole paise, and must match the phone.
- * - Expired items taken back (returns) are saved with the bill; they cost the shop nothing.
+ * - Each line is quantity × rate − the shop's discount, in whole paise, worked out here again.
+ * - Expired items taken back (returns) are valued the same way and taken off: the bill's total is the net
+ *   amount, given − returned, and must match the phone exactly. It is below zero if the returns are worth more.
  * - Sending the same bill twice (same clientId) returns the first copy instead of a duplicate.
  */
 export async function createSale(
@@ -217,7 +238,10 @@ export async function createSale(
   const missing = allIds.filter((id) => !productById.has(id));
   if (missing.length > 0) throw badRequest(`Unknown product id(s): ${missing.join(', ')}`);
 
-  let totalPaise = 0;
+  const shopRuleOf = (product: { discountKind: DiscountRule['kind'] | null; discountValue: number | null }): DiscountRule | null =>
+    product.discountKind && product.discountValue ? { kind: product.discountKind, value: product.discountValue } : null;
+
+  let givenPaise = 0;
   let totalQuantity = 0;
   let discountPaise = 0;
   const lines = input.items.map((item) => {
@@ -226,10 +250,8 @@ export async function createSale(
     if (gross > MAX_LINE_PAISE) throw badRequest('A bill line is too large');
     const rule = item.discount ?? null;
     const discount = lineDiscount(rule, item.unitPricePaise, item.quantity);
-    const shopRule: DiscountRule | null =
-      product.discountKind && product.discountValue ? { kind: product.discountKind, value: product.discountValue } : null;
-    const listDiscount = lineDiscount(shopRule, product.pricePaise, item.quantity);
-    totalPaise += gross - discount;
+    const listDiscount = lineDiscount(shopRuleOf(product), product.pricePaise, item.quantity);
+    givenPaise += gross - discount;
     totalQuantity += item.quantity;
     discountPaise += discount;
     return {
@@ -244,10 +266,28 @@ export async function createSale(
   });
   const returnLines = returns.map((r) => {
     const product = productById.get(r.productId)!;
-    return { ...r, productName: product.name, unitPricePaise: product.pricePaise };
+    const base = { productId: r.productId, productName: product.name, quantity: r.quantity, listPricePaise: product.pricePaise };
+    // Sent by an older app version: swapped free of charge, nothing taken off the bill.
+    if (r.unitPricePaise === undefined) {
+      return { ...base, unitPricePaise: product.pricePaise, rule: null, discountPaise: 0, listDiscountPaise: 0, creditPaise: 0 };
+    }
+    const gross = r.quantity * r.unitPricePaise;
+    if (gross > MAX_LINE_PAISE) throw badRequest('A returned line is too large');
+    const rule = r.discount ?? null;
+    const discount = lineDiscount(rule, r.unitPricePaise, r.quantity);
+    return {
+      ...base,
+      unitPricePaise: r.unitPricePaise,
+      rule,
+      discountPaise: discount,
+      listDiscountPaise: lineDiscount(shopRuleOf(product), product.pricePaise, r.quantity),
+      creditPaise: gross - discount,
+    };
   });
   const returnedQuantity = returnLines.reduce((acc, r) => acc + r.quantity, 0);
-  if (!Number.isSafeInteger(totalPaise)) throw badRequest('Bill total is too large');
+  const returnedPaise = returnLines.reduce((acc, r) => acc + r.creditPaise, 0);
+  const totalPaise = givenPaise - returnedPaise;
+  if (!Number.isSafeInteger(givenPaise) || !Number.isSafeInteger(returnedPaise)) throw badRequest('Bill total is too large');
   if (totalPaise !== input.totalPaise) {
     throw badRequest('Bill total does not match the items. Please make the bill again.', {
       expectedTotalPaise: totalPaise,
@@ -260,9 +300,9 @@ export async function createSale(
   // One statement for the bill, one for all its lines and one for the returns (lines go as one JSON value).
   const statements: Statement[] = [
     {
-      sql: `INSERT INTO sales (client_id, driver_id, store_id, area_id, sold_at, sale_date, payment_mode,
-                               total_paise, total_quantity, discount_paise, returned_quantity, device_sold_at, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+      sql: `INSERT INTO sales (client_id, driver_id, store_id, area_id, sold_at, sale_date, payment_mode, total_paise,
+                               total_quantity, discount_paise, returned_quantity, returned_paise, device_sold_at, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
       params: [
         input.clientId,
         driverId,
@@ -275,6 +315,7 @@ export async function createSale(
         totalQuantity,
         discountPaise,
         returnedQuantity,
+        returnedPaise,
         deviceSoldAt,
         nowIso(),
       ],
@@ -310,13 +351,29 @@ export async function createSale(
   }
   if (returnLines.length > 0) {
     statements.push({
-      sql: `INSERT INTO sale_returns (sale_id, product_id, product_name, quantity, unit_price_paise)
+      sql: `INSERT INTO sale_returns (sale_id, product_id, product_name, quantity, unit_price_paise, list_price_paise,
+                                      discount_kind, discount_value, discount_paise, list_discount_paise, credit_paise)
             SELECT ${saleId}, json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]'), json_extract(j.value, '$[2]'),
-                   json_extract(j.value, '$[3]')
+                   json_extract(j.value, '$[3]'), json_extract(j.value, '$[4]'), json_extract(j.value, '$[5]'),
+                   json_extract(j.value, '$[6]'), json_extract(j.value, '$[7]'), json_extract(j.value, '$[8]'),
+                   json_extract(j.value, '$[9]')
               FROM json_each(?2) j`,
       params: [
         input.clientId,
-        JSON.stringify(returnLines.map((r) => [r.productId, r.productName, r.quantity, r.unitPricePaise])),
+        JSON.stringify(
+          returnLines.map((r) => [
+            r.productId,
+            r.productName,
+            r.quantity,
+            r.unitPricePaise,
+            r.listPricePaise,
+            r.rule?.kind ?? null,
+            r.rule?.value ?? null,
+            r.discountPaise,
+            r.listDiscountPaise,
+            r.creditPaise,
+          ]),
+        ),
       ],
     });
   }
@@ -395,8 +452,9 @@ export async function restoreSale(db: Db, saleId: number): Promise<Sale> {
 }
 
 export interface DaySummary {
-  /** Bills with something sold (visits where only expired bread was replaced are not counted here). */
+  /** Bills with something given (visits where expired items were only taken back are not counted here). */
   bills: number;
+  /** Net amount of the bills (given − returned); the cash, UPI and udhaar parts below add up to it. */
   totalPaise: number;
   cashPaise: number;
   upiPaise: number;
@@ -404,6 +462,8 @@ export interface DaySummary {
   quantity: number;
   discountPaise: number;
   returnedQuantity: number;
+  /** Value of the expired items taken back (already taken off totalPaise). */
+  returnedPaise: number;
   cancelledBills: number;
 }
 
@@ -416,4 +476,5 @@ export const SUMMARY_COLUMNS = `
   coalesce(sum(total_quantity) FILTER (WHERE status = 'completed'), 0) AS quantity,
   coalesce(sum(discount_paise) FILTER (WHERE status = 'completed'), 0) AS "discountPaise",
   coalesce(sum(returned_quantity) FILTER (WHERE status = 'completed'), 0) AS "returnedQuantity",
+  coalesce(sum(returned_paise) FILTER (WHERE status = 'completed'), 0) AS "returnedPaise",
   count(*) FILTER (WHERE status = 'cancelled') AS "cancelledBills"`;

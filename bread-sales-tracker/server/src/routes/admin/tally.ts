@@ -20,6 +20,8 @@ interface TallyRow {
   cancelledPaise: number;
   discountPaise: number;
   returnedQuantity: number;
+  /** Value of the expired items taken back (already taken off the amounts above). */
+  returnedPaise: number;
   firstSaleAt: string | null;
   lastSaleAt: string | null;
   settlementId: number | null;
@@ -51,6 +53,7 @@ export function tallyRouter(config: Config, db: Db): Router {
               coalesce(sum(s.total_paise) FILTER (WHERE s.status = 'cancelled'), 0) AS "cancelledPaise",
               coalesce(sum(s.discount_paise) FILTER (WHERE s.status = 'completed'), 0) AS "discountPaise",
               coalesce(sum(s.returned_quantity) FILTER (WHERE s.status = 'completed'), 0) AS "returnedQuantity",
+              coalesce(sum(s.returned_paise) FILTER (WHERE s.status = 'completed'), 0) AS "returnedPaise",
               min(s.sold_at) FILTER (WHERE s.status = 'completed') AS "firstSaleAt",
               max(s.sold_at) FILTER (WHERE s.status = 'completed') AS "lastSaleAt",
               t.id AS "settlementId", t.cash_received_paise AS "cashReceivedPaise",
@@ -86,6 +89,7 @@ export function tallyRouter(config: Config, db: Db): Router {
         cashReceivedPaise: sum('cashReceivedPaise'),
         discountPaise: sum('discountPaise'),
         returnedQuantity: sum('returnedQuantity'),
+        returnedPaise: sum('returnedPaise'),
         settledDrivers: drivers.filter((d) => d.settled).length,
         driversWithSales: drivers.filter((d) => d.bills > 0).length,
       },

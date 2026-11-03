@@ -94,6 +94,7 @@ export function BillsScreen(props: { date?: string }) {
               </span>
               <strong>
                 {sum.returned} {t('pcs')}
+                {sum.returnedPaise > 0 && ` · −${rupees(sum.returnedPaise)}`}
               </strong>
             </div>
           )}
@@ -156,7 +157,7 @@ function BillRow(props: { bill: BillView }) {
         <span className="bill-row-shop">{b.storeName}</span>
         <span className="bill-row-sub">
           {timeText(b.soldAt, timezone())}
-          {b.id ? ` · #${b.id}` : ''} · {b.items.length > 0 && <PaymentTag mode={b.paymentMode} />}
+          {b.id ? ` · #${b.id}` : ''} · {b.totalPaise !== 0 && <PaymentTag mode={b.paymentMode} />}
           {b.returns.length > 0 && (
             <span className="tag-return">
               <IconReturn size={14} /> {b.returns.reduce((acc, r) => acc + r.quantity, 0)}
@@ -164,7 +165,7 @@ function BillRow(props: { bill: BillView }) {
           )}
         </span>
       </span>
-      <span className="bill-row-amount">{rupees(b.totalPaise)}</span>
+      <span className={`bill-row-amount ${b.totalPaise < 0 ? 'amount-back' : ''}`}>{rupees(b.totalPaise)}</span>
     </button>
   );
 }

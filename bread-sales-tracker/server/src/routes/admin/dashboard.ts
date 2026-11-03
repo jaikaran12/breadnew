@@ -34,7 +34,7 @@ export function dashboardRouter(config: Config, db: Db): Router {
       db.all(
         `SELECT a.id AS "areaId", a.name,
                 count(s.id) FILTER (WHERE s.total_quantity > 0) AS bills, coalesce(sum(s.total_paise), 0) AS "totalPaise",
-                coalesce(sum(s.returned_quantity), 0) AS "returnedQuantity",
+                coalesce(sum(s.returned_quantity), 0) AS "returnedQuantity", coalesce(sum(s.returned_paise), 0) AS "returnedPaise",
                 count(DISTINCT s.store_id) AS "storesVisited",
                 (SELECT count(*) FROM stores x WHERE x.area_id = a.id AND x.is_active = 1) AS "totalStores"
            FROM sales s JOIN areas a ON a.id = s.area_id
@@ -50,10 +50,10 @@ export function dashboardRouter(config: Config, db: Db): Router {
           GROUP BY p.id ORDER BY p.sort_order, lower(p.name)`,
         [date],
       ),
-      // Expired bread taken back (and replaced) today
+      // Expired items taken back today; valuePaise is what was taken off the bills for them.
       db.all(
         `SELECT p.id AS "productId", p.name, p.color, sum(r.quantity) AS quantity,
-                sum(r.quantity * r.unit_price_paise) AS "valuePaise", count(DISTINCT s.store_id) AS stores
+                sum(r.credit_paise) AS "valuePaise", count(DISTINCT s.store_id) AS stores
            FROM sale_returns r JOIN sales s ON s.id = r.sale_id JOIN products p ON p.id = r.product_id
           WHERE s.sale_date = ?1 AND s.status = 'completed'
           GROUP BY p.id ORDER BY quantity DESC, p.sort_order`,
@@ -62,7 +62,7 @@ export function dashboardRouter(config: Config, db: Db): Router {
       db.all(
         `SELECT s.id, s.sold_at AS "soldAt", s.payment_mode AS "paymentMode", s.total_paise AS "totalPaise",
                 s.total_quantity AS "totalQuantity", s.returned_quantity AS "returnedQuantity",
-                s.discount_paise AS "discountPaise", s.status, d.name AS "driverName", st.name AS "storeName",
+                s.returned_paise AS "returnedPaise", s.discount_paise AS "discountPaise", s.status, d.name AS "driverName", st.name AS "storeName",
                 a.name AS "areaName"
            FROM sales s JOIN drivers d ON d.id = s.driver_id JOIN stores st ON st.id = s.store_id
            JOIN areas a ON a.id = s.area_id
