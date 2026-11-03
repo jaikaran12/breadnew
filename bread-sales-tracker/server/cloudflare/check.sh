@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Checks that a live Bread Sales website answers correctly:
-#   bash check.sh https://bread-sales.<your-name>.workers.dev [expected Android key fingerprint]
+#   bash check.sh https://bread-sales.<your-name>.workers.dev [expected Android key fingerprint] [built site folder]
+# With the site folder (used right after a deploy) it also checks that the live pages are the version just built.
 set -euo pipefail
-base="${1:?Usage: check.sh <website address> [android-sha256-fingerprint]}"
+base="${1:?Usage: check.sh <website address> [android-sha256-fingerprint] [site-folder]}"
 base="${base%/}"
 fingerprint="${2:-}"
+site="${3:-}"
 echo "Checking $base"
 
 # A brand-new workers.dev address can take a few minutes before it starts working.
@@ -42,5 +44,14 @@ echo "OK  the app may call the server (CORS)"
 if [ -n "$fingerprint" ]; then
   curl -fsS --max-time 30 "$base/.well-known/assetlinks.json" | grep -qi "$fingerprint"
   echo "OK  /.well-known/assetlinks.json names the Android app's signing key (full screen app)"
+fi
+if [ -n "$site" ]; then
+  for page in "" "driver/"; do
+    if ! curl -fsS --max-time 30 "$base/$page" | cmp -s - "$site/${page}index.html"; then
+      echo "::error::$base/$page is not the version that was just built"
+      exit 1
+    fi
+  done
+  echo "OK  the live admin website and driver app are the new version"
 fi
 echo "All checks passed."

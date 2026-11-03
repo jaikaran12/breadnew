@@ -129,7 +129,7 @@ vars=()
 npx wrangler deploy -c "$CONFIG" ${vars[@]+"${vars[@]}"}
 
 say "Checking the live website"
-bash cloudflare/check.sh "$URL" "${ANDROID_CERT_SHA256:-}"
+bash cloudflare/check.sh "$URL" "${ANDROID_CERT_SHA256:-}" site
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "url=$URL" >>"$GITHUB_OUTPUT"; fi
 echo

@@ -65,6 +65,10 @@ describe('shop discounts (admin)', () => {
 
     const catalog = (await request(ctx.app).get('/api/driver/catalog').set(auth()).expect(200)).body;
     expect(catalog.version).not.toBe(before);
+    // Phones check this before each bill (one cheap request) and download the lists again only if it changed.
+    const version = (await request(ctx.app).get('/api/driver/catalog/version').set(auth()).expect(200)).body.version;
+    expect(version).toBe(catalog.version);
+    await request(ctx.app).get('/api/driver/catalog/version').expect(401);
     expect(catalog.discounts).toEqual([
       { storeId: s.store.id, productId: s.milk.id, kind: 'percent', value: 500 },
       { storeId: s.store.id, productId: s.brown.id, kind: 'amount', value: 200 },

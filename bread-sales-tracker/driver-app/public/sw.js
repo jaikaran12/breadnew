@@ -17,12 +17,17 @@ function assetUrls(html) {
   );
 }
 
-/** Downloads the newest app page + its files; replaces the saved copy only when everything arrived. */
+/**
+ * Downloads the newest app page + its files; replaces the saved copy only when everything arrived.
+ * When the saved copy changed (a new version), the open app is told, so it can switch to it.
+ */
 async function refreshShell() {
   const cache = await caches.open(CACHE);
   const res = await fetch(SHELL, { cache: 'no-store' });
   if (!res.ok || !(res.headers.get('content-type') || '').includes('text/html')) return;
   const html = await res.clone().text();
+  const saved = await cache.match(SHELL);
+  const savedHtml = saved ? await saved.text() : null;
   const assets = assetUrls(html);
   await Promise.all(
     assets.map(async (url) => {
@@ -38,7 +43,15 @@ async function refreshShell() {
   for (const req of await cache.keys()) {
     if (req.url.includes('/assets/') && !keep.has(req.url)) await cache.delete(req);
   }
+  if (savedHtml !== null && savedHtml !== html) {
+    for (const client of await self.clients.matchAll({ type: 'window' })) client.postMessage({ type: 'app-updated' });
+  }
 }
+
+// The app asks for a check now and then (it may stay open for days without reloading).
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'check-update') event.waitUntil(refreshShell().catch(() => undefined));
+});
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

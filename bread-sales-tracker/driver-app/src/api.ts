@@ -70,6 +70,7 @@ async function request<T>(method: string, path: string, body?: unknown, timeoutM
 export const api = {
   login: (phone: string, pin: string) => request<{ token: string; driver: Driver }>('POST', '/api/driver/login', { phone, pin }),
   catalog: () => request<Catalog>('GET', '/api/driver/catalog'),
+  catalogVersion: () => request<{ version: string }>('GET', '/api/driver/catalog/version', undefined, 10000),
   createSale: (sale: {
     clientId: string;
     storeId: number;

@@ -304,3 +304,52 @@ describe('shop discounts and expired returns on the phone', () => {
     expect(summarize(bills)).toMatchObject({ bills: 1, totalPaise: 8000, returned: 0 });
   });
 });
+
+describe('new app versions and fresh prices', () => {
+  it('switches to a downloaded new version only on the home screen', async () => {
+    const { __testHooks, actions } = await import('./store');
+    let reloads = 0;
+    const hooks = __testHooks({ reload: () => reloads++ });
+    const store = new Map<string, string>();
+    (globalThis as { sessionStorage?: unknown }).sessionStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+    };
+    __setStateForTests({ auth: { token: 't', driver: { id: 5, name: 'R', phone: '9' } }, stack: [{ name: 'home' }, { name: 'cart' }] });
+    actions.updateReady();
+    hooks.applyUpdateIfSafe();
+    expect(reloads).toBe(0); // in the middle of a bill: wait
+    actions.back();
+    hooks.applyUpdateIfSafe();
+    expect(reloads).toBe(1); // back home: switch
+    actions.updateReady();
+    hooks.applyUpdateIfSafe();
+    expect(reloads).toBe(1); // never twice in a row
+  });
+
+  it('downloads prices and discounts again only when they changed', async () => {
+    const { __testHooks } = await import('./store');
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    let serverVersion = 'v1';
+    globalThis.fetch = (async (url: string) => {
+      calls.push(String(url));
+      const body = String(url).endsWith('/catalog/version')
+        ? { version: serverVersion }
+        : { ...catalog, version: serverVersion, discounts: [{ storeId: 7, productId: 1, kind: 'percent', value: 500 }] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      __setStateForTests({ auth: { token: 't', driver: { id: 5, name: 'R', phone: '9' } }, catalog: { ...catalog, version: 'v1' } });
+      await __testHooks({}).checkCatalogVersion();
+      expect(calls.filter((c) => c.endsWith('/api/driver/catalog'))).toHaveLength(0);
+      serverVersion = 'v2';
+      await __testHooks({}).checkCatalogVersion();
+      expect(calls.filter((c) => c.endsWith('/api/driver/catalog'))).toHaveLength(1);
+      expect(getState().catalog?.version).toBe('v2');
+      expect(getState().catalog?.discounts).toHaveLength(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});

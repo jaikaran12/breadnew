@@ -48,6 +48,8 @@ export interface State {
   lastDriverId: number | null;
   stack: Screen[];
   toast: { text: string; kind: 'ok' | 'error' } | null;
+  /** A newer version of the app has been downloaded; it is switched to at the next safe moment. */
+  updateReady: boolean;
 }
 
 // Saved on the phone so nothing is lost if the app is closed or the phone restarts.
@@ -80,6 +82,7 @@ let state: State = {
   lastDriverId: load<number | null>('lastDriverId', null),
   stack: [{ name: 'home' }],
   toast: null,
+  updateReady: false,
 };
 
 const listeners = new Set<() => void>();
@@ -357,6 +360,7 @@ export function returnsCount(returns: ReturnLine[]): number {
 // ---------- background work ----------
 
 let catalogPromise: Promise<void> | null = null;
+let lastVersionCheck = 0;
 let syncPromise: Promise<void> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let retryDelay = 5000;
@@ -378,6 +382,63 @@ async function refreshCatalog(): Promise<void> {
     }
   })();
   return catalogPromise;
+}
+
+/**
+ * Before a bill: one small request to see whether prices or shop discounts changed since the lists were
+ * downloaded; downloads them again only if they did. At most once a minute.
+ */
+async function checkCatalogVersion(): Promise<void> {
+  if (!state.auth || !state.catalog || Date.now() - lastVersionCheck < 60_000) return;
+  lastVersionCheck = Date.now();
+  try {
+    const { version } = await api.catalogVersion();
+    if (state.online === false) setState({ online: true });
+    if (state.catalog && version !== state.catalog.version) await refreshCatalog();
+  } catch (err) {
+    noteError(err);
+  }
+}
+
+// ---------- new app versions ----------
+
+let reloadPage = () => window.location.reload();
+const RELOAD_KEY = 'bs-update-reload-at';
+
+/**
+ * Switches to a newly downloaded app version, but only at a safe moment: on the home screen (or the login
+ * screen). Bills, quantities typed so far and waiting bills are all kept on the phone, so nothing is lost.
+ */
+function applyUpdateIfSafe() {
+  if (!state.updateReady) return;
+  const top = state.stack[state.stack.length - 1];
+  if (state.auth && top?.name !== 'home') return;
+  try {
+    // Never reload twice in a row (protects against a loop if something goes wrong).
+    const last = Number(sessionStorage.getItem(RELOAD_KEY) ?? 0);
+    if (Date.now() - last < 60_000) return;
+    sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+  } catch {
+    // sessionStorage not available: still fine to reload once
+  }
+  state = { ...state, updateReady: false };
+  reloadPage();
+}
+
+/**
+ * Backup for a missed "new version" message: compares the app file this page runs with the one in the saved
+ * copy of the app (the service worker replaces the saved copy when a new version is published).
+ */
+async function checkSavedVersion(): Promise<void> {
+  try {
+    if (typeof caches === 'undefined') return;
+    const saved = await caches.match(new URL('./', window.location.href).href);
+    const savedFile = saved ? (await saved.text()).match(/assets\/index-[\w-]+\.js/)?.[0] : undefined;
+    const running = [...document.scripts].map((s) => s.src).find((src) => /assets\/index-[\w-]+\.js/.test(src));
+    if (savedFile && running && !running.endsWith(savedFile)) actions.updateReady();
+  } catch {
+    // no saved copy yet (first start) or not allowed: nothing to do
+  }
 }
 
 function scheduleRetry() {
@@ -538,8 +599,14 @@ export const actions = {
     setState({ stack: screens.length ? screens : [{ name: 'home' }] });
   },
 
+  /** The service worker has saved a newer version of the app. */
+  updateReady() {
+    setState({ updateReady: true });
+  },
+
   // Bill making
   startBill(store: Store, areaName: string) {
+    void checkCatalogVersion();
     const d = state.draft;
     if (d && d.storeId === store.id) return; // continue the unfinished bill
     setState({
@@ -653,9 +720,23 @@ export function startApp() {
   applyApiConfig();
   window.addEventListener('online', () => actions.setOnline(true));
   window.addEventListener('offline', () => setState({ online: false }));
+  let lastUpdateCheck = Date.now();
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') wakeUp();
+    if (document.visibilityState !== 'visible') return;
+    wakeUp();
+    void checkSavedVersion();
+    // The app may stay open for days: ask for a check for a new version now and then.
+    if (Date.now() - lastUpdateCheck > 15 * 60 * 1000) {
+      lastUpdateCheck = Date.now();
+      navigator.serviceWorker?.controller?.postMessage({ type: 'check-update' });
+    }
   });
+  // Switch to a downloaded new version as soon as the driver is on the home screen.
+  listeners.add(applyUpdateIfSafe);
+  applyUpdateIfSafe();
+  // In case the "new version" message was missed: compare with the saved copy once it has been refreshed.
+  setTimeout(() => void checkSavedVersion(), 5000);
+  setTimeout(() => void checkSavedVersion(), 20000);
   // Keep trying to send waiting bills while the app is open.
   setInterval(() => {
     if (state.auth && state.outbox.some((o) => o.driverId === state.auth!.driver.id && !o.rejected)) void syncNow();
@@ -670,4 +751,11 @@ export function startApp() {
 /** Only for tests. */
 export function __setStateForTests(patch: Partial<State>) {
   setState(patch);
+}
+
+/** Only for tests. */
+export function __testHooks(options: { reload?: () => void }) {
+  if (options.reload) reloadPage = options.reload;
+  lastVersionCheck = 0;
+  return { applyUpdateIfSafe, checkCatalogVersion };
 }

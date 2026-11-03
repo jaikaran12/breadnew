@@ -159,6 +159,12 @@ export function driverRouter(config: Config, db: Db, loginLimiter: RequestHandle
     });
   });
 
+  /** Cheap check (one row) so a phone can tell whether its prices / discounts are still current. */
+  router.get('/catalog/version', auth, async (_req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.json({ version: await catalogVersion(db, config) });
+  });
+
   router.post('/sales', auth, async (req, res) => {
     const input = saleSchema.parse(req.body);
     const { sale, created } = await createSale(db, config, req.driver!.id, input);
