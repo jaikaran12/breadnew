@@ -104,6 +104,8 @@ export interface ImportResult {
   areasCreated: string[];
   storesCreated: number;
   skippedExisting: number;
+  /** Shops already in the list whose pincode / GSTIN the sheet fills in or changes. */
+  updatedExisting: number;
   errors: Array<{ line: number; message: string }>;
 }
 
@@ -301,7 +303,9 @@ export function storesRouter(config: Config, db: Db): Router {
   /**
    * Bulk import from CSV / pasted Excel cells. Columns (header row required, any order):
    * Area, Shop name, Owner, Phone, Address, Pincode, GSTIN, Notes. Missing areas are created.
-   * Shops that already exist (same name in the same area) are skipped, so the same file can be imported twice.
+   * Shops that already exist (same name in the same area) are not added again, so the same file can be imported
+   * twice; only their Pincode and GSTIN are filled in from the sheet (an empty cell keeps what is saved). So the
+   * owner can download the shop list, fill in those two columns in Excel and import it back.
    * Everything is saved in one transaction.
    */
   router.post('/import', async (req, res) => {
@@ -325,16 +329,22 @@ export function storesRouter(config: Config, db: Db): Router {
       areasCreated: [],
       storesCreated: 0,
       skippedExisting: 0,
+      updatedExisting: 0,
       errors: [],
     };
 
     const [areaRows, storeRows] = await Promise.all([
       db.all<{ id: number; name: string }>('SELECT id, name FROM areas'),
-      db.all<{ areaId: number; name: string }>('SELECT area_id AS "areaId", name FROM stores'),
+      db.all<{ id: number; areaId: number; name: string; pincode: string | null; gstin: string | null }>(
+        'SELECT id, area_id AS "areaId", name, pincode, gstin FROM stores',
+      ),
     ]);
     // Area key -> existing area id, or the exact name of an area this import creates.
     const areas = new Map<string, number | string>(areaRows.map((a) => [sqlLower(a.name), a.id]));
     const existing = new Set(storeRows.map((s) => `${s.areaId}:${sqlLower(s.name)}`));
+    const saved = new Map(storeRows.map((s) => [`${s.areaId}:${sqlLower(s.name)}`, s]));
+    // Existing shop id -> [id, pincode, gstin] to fill in (null = keep what is saved)
+    const updates = new Map<number, [number, string | null, string | null]>();
     const newStores: Array<
       [number | null, string | null, string, string | null, string | null, string | null, string | null, string | null, string | null]
     > = [];
@@ -366,7 +376,15 @@ export function storesRouter(config: Config, db: Db): Router {
       }
       const key = `${typeof area === 'number' ? area : `new:${sqlLower(area)}`}:${sqlLower(name)}`;
       if (existing.has(key)) {
-        result.skippedExisting++;
+        const shop = saved.get(key);
+        const newPin = pincode.value && pincode.value !== shop?.pincode ? pincode.value : null;
+        const newGst = gstin.value && gstin.value !== shop?.gstin ? gstin.value : null;
+        if (shop && (newPin || newGst)) {
+          const before = updates.get(shop.id);
+          updates.set(shop.id, [shop.id, newPin ?? before?.[1] ?? null, newGst ?? before?.[2] ?? null]);
+        } else if (!shop || !updates.has(shop.id)) {
+          result.skippedExisting++;
+        }
         continue;
       }
       existing.add(key);
@@ -384,7 +402,8 @@ export function storesRouter(config: Config, db: Db): Router {
       result.storesCreated++;
     }
 
-    if (!body.dryRun && (newStores.length > 0 || result.areasCreated.length > 0)) {
+    result.updatedExisting = updates.size;
+    if (!body.dryRun && (newStores.length > 0 || result.areasCreated.length > 0 || updates.size > 0)) {
       const now = nowIso();
       const statements: Statement[] = [];
       if (result.areasCreated.length > 0) {
@@ -402,6 +421,17 @@ export function storesRouter(config: Config, db: Db): Router {
                        json_extract(j.value, '$[8]'), ?2, ?2
                   FROM json_each(?1) j`,
           params: [JSON.stringify(newStores.slice(i, i + IMPORT_CHUNK)), now],
+        });
+      }
+      if (updates.size > 0) {
+        statements.push({
+          sql: `UPDATE stores SET
+                  pincode = coalesce(json_extract(j.value, '$[1]'), stores.pincode),
+                  gstin = coalesce(json_extract(j.value, '$[2]'), stores.gstin),
+                  updated_at = ?2
+                FROM json_each(?1) AS j
+               WHERE stores.id = json_extract(j.value, '$[0]')`,
+          params: [JSON.stringify([...updates.values()]), now],
         });
       }
       statements.push(bumpCatalogStatement());

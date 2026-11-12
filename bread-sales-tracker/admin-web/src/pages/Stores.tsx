@@ -312,6 +312,7 @@ interface ImportResult {
   areasCreated: string[];
   storesCreated: number;
   skippedExisting: number;
+  updatedExisting: number;
   errors: Array<{ line: number; message: string }>;
 }
 
@@ -330,7 +331,11 @@ function ImportDialog(props: { open: boolean; onClose: () => void }) {
     onSuccess: (res) => {
       if (res.dryRun) setPreview(res);
       else {
-        toast(`Imported ${res.storesCreated} shops`);
+        toast(
+          [res.storesCreated > 0 && `Imported ${res.storesCreated} shops`, res.updatedExisting > 0 && `updated ${res.updatedExisting} shops`]
+            .filter(Boolean)
+            .join(', ') || 'Nothing to change',
+        );
         void qc.invalidateQueries();
         setText('');
         setPreview(null);
@@ -356,7 +361,11 @@ function ImportDialog(props: { open: boolean; onClose: () => void }) {
           <b>Phone</b>, <b>Address</b>, <b>Pincode</b>, <b>GSTIN</b>. (<a href={sampleUrl} download="shops-sample.csv">download a sample</a>)
         </li>
         <li>Copy the cells (including the heading row) and paste below, or upload the file saved as CSV.</li>
-        <li>Click “Check”, then “Import”. New areas are created; shops already in the list are skipped.</li>
+        <li>
+          Click “Check”, then “Import”. New areas are created; shops already in the list are not added again, but their
+          Pincode and GSTIN are filled in from your sheet. Tip: download the shop list, fill in those two columns in Excel,
+          and import it back.
+        </li>
       </ol>
       <textarea
         className="import-text"
@@ -377,6 +386,11 @@ function ImportDialog(props: { open: boolean; onClose: () => void }) {
             {preview.areasCreated.length > 0 && (
               <>
                 , <b>{preview.areasCreated.length}</b> new areas ({preview.areasCreated.join(', ')})
+              </>
+            )}
+            {preview.updatedExisting > 0 && (
+              <>
+                , <b>{preview.updatedExisting}</b> shops already in the list get their pincode / GSTIN filled in
               </>
             )}
             , <b>{preview.skippedExisting}</b> already exist and will be skipped.
@@ -404,8 +418,12 @@ function ImportDialog(props: { open: boolean; onClose: () => void }) {
             Check
           </button>
         ) : (
-          <button className="btn btn-primary" onClick={() => run.mutate(false)} disabled={run.isPending || preview.storesCreated === 0}>
-            Import {preview.storesCreated} shops
+          <button
+            className="btn btn-primary"
+            onClick={() => run.mutate(false)}
+            disabled={run.isPending || (preview.storesCreated === 0 && preview.updatedExisting === 0)}
+          >
+            {preview.storesCreated > 0 ? `Import ${preview.storesCreated} shops` : `Update ${preview.updatedExisting} shops`}
           </button>
         )}
       </div>

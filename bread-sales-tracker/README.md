@@ -291,6 +291,8 @@ screen**. It is the same app.
   (switch this off in the download window to enter them in Tally yourself). Cancelled bills are left out.
   Product and shop names must match your Tally stock items and party ledgers; the window lists shops with no
   GSTIN or pincode, and different shops with the same name (Tally would merge them).
+  To add pincodes and GSTINs for many shops at once: Shops → **Download list**, fill in the Pincode and GSTIN
+  columns in Excel, then **Import** the same sheet — shops already in the list only get those two filled in.
 * **Expired bread:** each piece taken back comes off its bill at the shop's rate (after its discount), so
   the bill shows **Given − Returned = Net amount** and every total (cash, reports, tally) is net. The fresh
   pieces given in exchange are billed on the Sale tab, so a one-for-one swap comes to ₹0; if a shop returns

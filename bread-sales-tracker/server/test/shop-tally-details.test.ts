@@ -97,6 +97,28 @@ describe('shop pincode and GSTIN', () => {
     expect(two).toMatchObject({ pincode: null, gstin: null });
   });
 
+  it('fills in Pincode and GSTIN of shops already in the list from an imported sheet', async () => {
+    // e.g. the downloaded shop list with the two columns filled in Excel
+    const csv = [
+      'Area,Shop name,Owner,Pincode,GSTIN,Active',
+      `Gandhi Nagar,Imported Two,Someone,180002,${GSTIN}, yes`,
+      'Gandhi Nagar,Imported One,,,,yes',
+      'Gandhi Nagar,Sharma Kirana,,180003,,yes',
+    ].join('\n');
+    const check = await s.admin.post('/api/admin/stores/import').send({ csv, dryRun: true }).expect(200);
+    expect(check.body).toMatchObject({ storesCreated: 0, updatedExisting: 2, skippedExisting: 1, errors: [] });
+    const res = await s.admin.post('/api/admin/stores/import').send({ csv }).expect(200);
+    expect(res.body).toMatchObject({ storesCreated: 0, updatedExisting: 2, skippedExisting: 1 });
+    const find = async (q: string) => (await s.admin.get('/api/admin/stores').query({ q }).expect(200)).body.stores[0];
+    // Only pincode and GSTIN change; empty cells keep what is saved; other columns are not touched
+    expect(await find('Imported Two')).toMatchObject({ pincode: '180002', gstin: GSTIN, ownerName: null });
+    expect(await find('Imported One')).toMatchObject({ pincode: '180004', gstin: GSTIN });
+    expect(await find('Sharma Kirana')).toMatchObject({ pincode: '180003', gstin: null });
+    // Importing the same sheet again changes nothing
+    const again = await s.admin.post('/api/admin/stores/import').send({ csv, dryRun: true }).expect(200);
+    expect(again.body).toMatchObject({ updatedExisting: 0, skippedExisting: 3 });
+  });
+
   it('gives the shop details with each bill in the export (for the Tally file)', async () => {
     const shop = (await s.admin.get('/api/admin/stores').query({ q: 'new kirana' }).expect(200)).body.stores[0];
     await request(ctx.app)
