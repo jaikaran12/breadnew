@@ -42,7 +42,7 @@ describe('database upgrade 0002 (discounts and returns)', () => {
                      si.quantity, si.unit_price_paise, si.line_total_paise
                 FROM sales s JOIN sale_items si ON si.sale_id = s.id ORDER BY si.id`);
     const before = await snapshot();
-    expect(await migrate(db, () => undefined)).toEqual(['0002_discounts_returns.sql', '0003_returns_on_bill.sql']);
+    expect(await migrate(db, () => undefined)).toEqual(['0002_discounts_returns.sql', '0003_returns_on_bill.sql', '0004_store_tally_details.sql']);
     expect(await snapshot()).toEqual(before);
     expect(await db.all('PRAGMA foreign_key_check')).toEqual([]);
     expect(await db.first('PRAGMA integrity_check')).toEqual({ integrity_check: 'ok' });
@@ -119,7 +119,7 @@ describe('database upgrade 0003 (returns on the bill)', () => {
       other: await db.all('SELECT (SELECT count(*) FROM store_discounts) AS d, (SELECT count(*) FROM settlements) AS t'),
     });
     const before = await snapshot();
-    expect(await migrate(db, () => undefined)).toEqual(['0003_returns_on_bill.sql']);
+    expect(await migrate(db, () => undefined)).toEqual(['0003_returns_on_bill.sql', '0004_store_tally_details.sql']);
     expect(await snapshot()).toEqual(before);
     expect(await db.all('PRAGMA foreign_key_check')).toEqual([]);
     expect(await db.first('PRAGMA integrity_check')).toEqual({ integrity_check: 'ok' });
@@ -172,6 +172,29 @@ describe('database upgrade 0003 (returns on the bill)', () => {
     expect(counts).toMatchObject({ sales: 3, sale_items: 3, sale_returns: 3, store_discounts: 1, settlements: 1 });
     expect(await db.first('SELECT sum(total_paise) AS t, sum(returned_paise) AS r FROM sales')).toEqual({ t: 15100, r: 0 });
     expect(await db.first('SELECT sum(quantity) AS q, sum(credit_paise) AS c FROM sale_returns')).toEqual({ q: 5, c: 0 });
+    db.close();
+  });
+});
+
+describe('database upgrade 0004 (pincode and GSTIN for Tally)', () => {
+  it('adds the two shop columns and keeps every shop', async () => {
+    const db = await databaseAt(['0001_init.sql', '0002_discounts_returns.sql', '0003_returns_on_bill.sql']);
+    await db.exec(`
+      INSERT INTO areas (id, name) VALUES (1, 'Gandhi Nagar');
+      INSERT INTO stores (id, area_id, name, owner_name, phone, address) VALUES (1, 1, 'Sharma Kirana', 'Ramesh', '9000000001', 'Main road'),
+                                                                     (2, 1, 'Gupta Store', NULL, NULL, NULL);
+    `);
+    const before = await db.all('SELECT id, area_id, name, owner_name, phone, address, is_active FROM stores ORDER BY id');
+    expect(await migrate(db, () => undefined)).toEqual(['0004_store_tally_details.sql']);
+    expect(await db.all('SELECT id, area_id, name, owner_name, phone, address, is_active FROM stores ORDER BY id')).toEqual(before);
+    expect(await db.all('SELECT pincode, gstin FROM stores ORDER BY id')).toEqual([
+      { pincode: null, gstin: null },
+      { pincode: null, gstin: null },
+    ]);
+    await db.run(`UPDATE stores SET pincode = '180001', gstin = '01ABCDE1234F1ZE' WHERE id = 1`);
+    await expect(db.run(`UPDATE stores SET pincode = '18000' WHERE id = 2`)).rejects.toThrow(/CHECK/);
+    await expect(db.run(`UPDATE stores SET gstin = '01abcde1234f1ze' WHERE id = 2`)).rejects.toThrow(/CHECK/);
+    expect(await db.first('PRAGMA integrity_check')).toEqual({ integrity_check: 'ok' });
     db.close();
   });
 });

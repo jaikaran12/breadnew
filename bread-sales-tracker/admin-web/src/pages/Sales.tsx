@@ -3,9 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { SaleModal } from '../components/SaleModal';
-import { Badge, BillBadges, Card, DownloadButton, Empty, ErrorBox, Loading, PageHeader, Pager, RangePicker } from '../components/ui';
+import { Badge, BillBadges, Card, DownloadButton, Empty, ErrorBox, Loading, Modal, PageHeader, Pager, RangePicker, Toggle } from '../components/ui';
 import { fetchSalesForExport, saveCsv, salesCsv } from '../exporting';
-import { dateTime, num, rupees, shortDate, time, todayIn } from '../format';
+import { dateLabel, dateTime, num, rupees, shortDate, time, todayIn } from '../format';
+import { downloadTallyFile, type TallyFile } from '../tally';
 import { useAreas, useDrivers } from '../lookups';
 import { useIdle } from '../idle';
 import type { Sale, Summary } from '../types';
@@ -36,6 +37,7 @@ export function SalesPage() {
   };
   const [search, setSearch] = useState(filters.q);
   const [openSale, setOpenSale] = useState<number | null>(null);
+  const [tally, setTally] = useState(false);
   const drivers = useDrivers();
   const areas = useAreas();
   const idle = useIdle();
@@ -91,9 +93,13 @@ export function SalesPage() {
                 }}
               />
             ))}
+            <button className="btn btn-primary" onClick={() => setTally(true)}>
+              Download for Tally (Excel)
+            </button>
           </>
         }
       />
+      {tally && <TallyDialog query={query} onClose={() => setTally(false)} />}
       <Card>
         <div className="filters">
           <RangePicker from={filters.from} to={filters.to} onChange={(r) => set(r)} />
@@ -250,5 +256,67 @@ export function SalesPage() {
       </Card>
       <SaleModal saleId={openSale} onClose={() => setOpenSale(null)} />
     </>
+  );
+}
+
+/** Bills in the owner's Tally bulk-upload format (one Excel sheet, one row per item). */
+function TallyDialog(props: { query: Record<string, string> & { from: string; to: string }; onClose: () => void }) {
+  const [returns, setReturns] = useState(true);
+  const [done, setDone] = useState<TallyFile | null>(null);
+  const { from, to } = props.query;
+  const filtered = ['driverId', 'areaId', 'storeId', 'paymentMode', 'q'].some((k) => props.query[k]);
+  const names = (list: string[]) => (list.length > 6 ? `${list.slice(0, 6).join(', ')} and ${list.length - 6} more` : list.join(', '));
+  return (
+    <Modal open title="Download for Tally" onClose={props.onClose}>
+      <p>
+        Valid bills from <strong>{dateLabel(from)}</strong> to <strong>{dateLabel(to)}</strong>
+        {filtered ? ' (with the filters on this page)' : ''}, as an Excel file in your Tally bulk-upload format: sheet
+        “Accounting Voucher”, one row per item, the bill number as the voucher number. Cancelled bills are left out.
+      </p>
+      <Toggle
+        checked={returns}
+        onChange={(v) => {
+          setReturns(v);
+          setDone(null);
+        }}
+        label={
+          returns
+            ? 'Expired returns go in as minus lines — each Tally bill matches the net amount'
+            : 'Expired returns left out — enter them in Tally yourself (e.g. as a credit note)'
+        }
+      />
+      <div className="modal-actions">
+        <button type="button" className="btn btn-light" onClick={props.onClose}>
+          Close
+        </button>
+        <DownloadButton
+          className="btn btn-primary"
+          label="Download Excel"
+          run={async (progress) => setDone(await downloadTallyFile(props.query, { returns }, progress))}
+        />
+      </div>
+      {done && (
+        <div className="alert alert-green" data-testid="tally-done">
+          <div>
+            <strong>Downloaded {num(done.bills)} bills</strong> ({num(done.rows.length)} rows), total {rupees(done.amountPaise)}.
+            {done.skipped > 0 && ` ${done.skipped} visit(s) with only expired returns had nothing to send.`}
+          </div>
+          {done.sameNameShops.length > 0 && (
+            <div className="small warn">
+              Different shops with the same name: {names(done.sameNameShops)}. Tally would put their bills on one party —
+              rename them (for example add the area) before importing.
+            </div>
+          )}
+          {done.shopsWithoutGstin.length > 0 && (
+            <div className="small">
+              No GSTIN (sent as Unregistered/Consumer): {names(done.shopsWithoutGstin)}.
+            </div>
+          )}
+          {done.shopsWithoutPincode.length > 0 && (
+            <div className="small">No pincode yet: {names(done.shopsWithoutPincode)} — add it on the shop's page.</div>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }

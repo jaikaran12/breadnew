@@ -58,7 +58,16 @@ export function StoreDetailPage() {
                 <a href={`tel:${store.phone}`}>{store.phone}</a>
               </>
             )}
-            {store.address && ` · ${store.address}`} {!store.isActive && <Badge tone="red">removed</Badge>}{' '}
+            {store.address && ` · ${store.address}`}
+            {store.pincode && ` · ${store.pincode}`}{' '}
+            {store.gstin ? (
+              <Badge tone="green" title="Goes to Tally as Regular">
+                GSTIN {store.gstin}
+              </Badge>
+            ) : (
+              <Badge title="No GSTIN: goes to Tally as Unregistered/Consumer">no GSTIN</Badge>
+            )}{' '}
+            {!store.isActive && <Badge tone="red">removed</Badge>}{' '}
             {store.createdByDriverName && <Badge tone="blue">added by {store.createdByDriverName}</Badge>}
           </>
         }

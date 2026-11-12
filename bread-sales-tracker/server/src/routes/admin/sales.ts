@@ -9,6 +9,7 @@ import {
   getSale,
   restoreSale,
   SALE_SELECT,
+  SALE_SELECT_WITH_SHOP,
   SUMMARY_COLUMNS,
   type SaleRow,
 } from '../../services/sales.js';
@@ -69,7 +70,10 @@ export function salesRouter(config: Config, db: Db): Router {
     const w = salesWhere({ ...f, from: f.date, to: f.date }, today, 'all');
     const limit = w.param(EXPORT_PAGE_SIZE + 1);
     const offset = w.param(f.offset);
-    const rows = await db.all<SaleRow>(`${SALE_SELECT} ${w.sql} ORDER BY s.sold_at, s.id LIMIT ${limit} OFFSET ${offset}`, w.values);
+    const rows = await db.all<SaleRow>(
+      `${SALE_SELECT_WITH_SHOP} ${w.sql} ORDER BY s.sold_at, s.id LIMIT ${limit} OFFSET ${offset}`,
+      w.values,
+    );
     const more = rows.length > EXPORT_PAGE_SIZE;
     res.json({
       date: f.date,

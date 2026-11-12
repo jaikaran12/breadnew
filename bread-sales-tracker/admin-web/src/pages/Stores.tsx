@@ -26,13 +26,15 @@ async function downloadShopList(progress: (done: number, total: number) => void)
   }
   saveCsv(
     `shops-${todayIn()}.csv`,
-    ['Area', 'Shop name', 'Owner', 'Phone', 'Address', 'Notes', 'Active', 'Last bill', 'Sales last 30 days (Rs)'],
+    ['Area', 'Shop name', 'Owner', 'Phone', 'Address', 'Pincode', 'GSTIN', 'Notes', 'Active', 'Last bill', 'Sales last 30 days (Rs)'],
     stores.map((r) => [
       r.areaName,
       r.name,
       r.ownerName,
       r.phone,
       r.address,
+      r.pincode,
+      r.gstin,
       r.notes,
       r.isActive ? 'yes' : 'no',
       r.lastSaleAt ? new Date(r.lastSaleAt).toLocaleString('en-IN', { timeZone: getTimeZone() }) : '',
@@ -197,6 +199,8 @@ export function StoreForm(props: { store: Store | 'new'; onClose: () => void }) 
           ownerName: editing.ownerName ?? '',
           phone: editing.phone ?? '',
           address: editing.address ?? '',
+          pincode: editing.pincode ?? '',
+          gstin: editing.gstin ?? '',
           notes: editing.notes ?? '',
           isActive: editing.isActive,
         }
@@ -206,6 +210,8 @@ export function StoreForm(props: { store: Store | 'new'; onClose: () => void }) 
           ownerName: '',
           phone: '',
           address: '',
+          pincode: '',
+          gstin: '',
           notes: '',
           isActive: true,
         },
@@ -261,6 +267,21 @@ export function StoreForm(props: { store: Store | 'new'; onClose: () => void }) 
         <Field label="Address / landmark">
           <input value={form.address} onChange={set('address')} maxLength={300} />
         </Field>
+        <div className="form-2">
+          <Field label="Pincode">
+            <input value={form.pincode} onChange={set('pincode')} inputMode="numeric" maxLength={7} placeholder="e.g. 180001" />
+          </Field>
+          <Field label="GSTIN" hint="Leave empty if the shop has no GST number (Tally: Unregistered/Consumer).">
+            <input
+              value={form.gstin}
+              onChange={(e) => setForm({ gstin: e.target.value.toUpperCase() })}
+              maxLength={18}
+              placeholder="15 letters and digits"
+              autoCapitalize="characters"
+              spellCheck={false}
+            />
+          </Field>
+        </div>
         <Field label="Notes (only you see these)">
           <textarea value={form.notes} onChange={set('notes')} maxLength={500} rows={2} />
         </Field>
@@ -294,10 +315,10 @@ interface ImportResult {
   errors: Array<{ line: number; message: string }>;
 }
 
-const SAMPLE = `Area,Shop name,Owner,Phone,Address
-Gandhi Nagar,Sharma Kirana,Ramesh Sharma,9876543210,Near Hanuman temple
-Gandhi Nagar,Balaji Provision,,9812345678,Main road
-Station Road,Gupta General Store,Anil Gupta,,Opp. bus stand
+const SAMPLE = `Area,Shop name,Owner,Phone,Address,Pincode,GSTIN
+Gandhi Nagar,Sharma Kirana,Ramesh Sharma,9876543210,Near Hanuman temple,180004,
+Gandhi Nagar,Balaji Provision,,9812345678,Main road,180004,
+Station Road,Gupta General Store,Anil Gupta,,Opp. bus stand,180012,
 `;
 
 function ImportDialog(props: { open: boolean; onClose: () => void }) {
@@ -332,7 +353,7 @@ function ImportDialog(props: { open: boolean; onClose: () => void }) {
       <ol className="import-help">
         <li>
           Make a sheet in Excel / Google Sheets with columns <b>Area</b>, <b>Shop name</b> and optionally <b>Owner</b>,{' '}
-          <b>Phone</b>, <b>Address</b>. (<a href={sampleUrl} download="shops-sample.csv">download a sample</a>)
+          <b>Phone</b>, <b>Address</b>, <b>Pincode</b>, <b>GSTIN</b>. (<a href={sampleUrl} download="shops-sample.csv">download a sample</a>)
         </li>
         <li>Copy the cells (including the heading row) and paste below, or upload the file saved as CSV.</li>
         <li>Click “Check”, then “Import”. New areas are created; shops already in the list are skipped.</li>

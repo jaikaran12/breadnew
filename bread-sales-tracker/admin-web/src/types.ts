@@ -38,6 +38,10 @@ export interface Store {
   ownerName: string | null;
   phone: string | null;
   address: string | null;
+  /** 6-digit pincode (for Tally). */
+  pincode: string | null;
+  /** GST number; a shop with one is "Regular" in Tally, without one "Unregistered/Consumer". */
+  gstin: string | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -145,6 +149,10 @@ export interface Sale {
   priceMismatch: boolean;
   items: SaleItem[];
   returns: SaleReturn[];
+  /** Only in the day-by-day export (for the Tally file): the shop's address, pincode and GSTIN. */
+  storeAddress?: string | null;
+  storePincode?: string | null;
+  storeGstin?: string | null;
 }
 
 export interface Summary {

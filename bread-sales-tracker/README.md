@@ -48,10 +48,10 @@ All money is calculated in whole paise, and the server checks every bill total a
 | Page | Use it for |
 | --- | --- |
 | **Dashboard** | Today's sales, live (refreshes every minute): total, bills, shops visited, cash / UPI / udhaar, per driver, per area, products sold, last 14 days, latest bills |
-| **Sales (bills)** | Every bill with filters (dates, driver, area, payment, cancelled, shop name or bill number). Open a bill to see the items; cancel a wrong bill (with a reason) or restore it. Download as CSV (opens in Excel) |
+| **Sales (bills)** | Every bill with filters (dates, driver, area, payment, cancelled, shop name or bill number). Open a bill to see the items; cancel a wrong bill (with a reason) or restore it. Download as CSV (opens in Excel), or **Download for Tally (Excel)** — the bills in your Tally bulk-upload format |
 | **Cash tally** | At the end of the day: for each driver, **cash expected** (cash bills only, after any money given back to shops), UPI, udhaar and how many expired items they should bring back (and their value taken off bills). Type the cash handed over and the page shows **Short ₹… / Extra ₹… / Matches**. If a late bill arrives after you tallied, the page warns you. After you tally a day, the driver can no longer cancel bills from that day on the phone |
 | **Reports** | Any date range, grouped by product, shop, area, driver or day. Amounts are **net** (given − expired taken back), with the discount given and the expired items taken back (units and ₹), and CSV download |
-| **Shops (kirana)** | Search, filter by area, find shops with no bill for 3/7/30 days, add/edit/remove shops, see each shop's purchases (what they buy, average bill, udhaar, recent bills). **Import your whole shop list from Excel** |
+| **Shops (kirana)** | Search, filter by area, find shops with no bill for 3/7/30 days, add/edit/remove shops (with **pincode** and **GSTIN** for Tally), see each shop's purchases (what they buy, average bill, udhaar, recent bills). **Import your whole shop list from Excel** (optional Pincode and GSTIN columns) |
 | **Areas** | Add/rename areas, set their order in the app |
 | **Products & prices** | Add products, change prices (with price history), colours, order in the app, hide products |
 | **Discounts** | Special rates for some shops: for each product **% off** or **₹ off each**. The driver app takes them off by itself and the bill (and WhatsApp bill) shows the discount. Set them from the Discounts page or a shop's page |
@@ -279,6 +279,18 @@ screen**. It is the same app.
 * **Price change?** Edit the product. Phones pick up the new price within a few minutes when online. Bills
   made earlier keep their old price. A bill made with an old price list is marked “Old rate”. A % discount
   follows the new price; a “₹ off each” discount stays the same amount.
+* **Tally:** Sales → pick the dates → **Download for Tally (Excel)** → import the file in Tally. The file
+  copies your template exactly: one sheet “Accounting Voucher”, the same 37 column headings in the same
+  order, one row per item, the bill number as the voucher number on every row of that bill, the date as
+  dd-mm-yyyy. Buyer, Bill to and Mailing name are the shop name; address, pincode and GSTIN come from the
+  shop (Regular with a GSTIN, Unregistered/Consumer without). Item rate, Disc% (a “₹ off each” discount is
+  turned into a %, e.g. ₹2 off ₹75 = 2.6667%) and amount are exactly as on the bill; Ledger amount = item
+  amount. Fixed values as in the template: Bill of Supply, Item Invoice, Jammu & Kashmir, India, Retailer,
+  Sales, Cr/Dr, nos, IGST/CGST/SGST 0, Roundoff Amount 0, narration “test”, QR No, WhattsApp Esc (change them
+  in `admin-web/src/tally.ts`). Expired returns go in as minus lines so each Tally bill equals the net amount
+  (switch this off in the download window to enter them in Tally yourself). Cancelled bills are left out.
+  Product and shop names must match your Tally stock items and party ledgers; the window lists shops with no
+  GSTIN or pincode, and different shops with the same name (Tally would merge them).
 * **Expired bread:** each piece taken back comes off its bill at the shop's rate (after its discount), so
   the bill shows **Given − Returned = Net amount** and every total (cash, reports, tally) is net. The fresh
   pieces given in exchange are billed on the Sale tab, so a one-for-one swap comes to ₹0; if a shop returns

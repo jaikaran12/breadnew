@@ -7,8 +7,24 @@ import { attachItems, SALE_SELECT, type SaleRow } from '../../services/sales.js'
 import { bumpCatalogStatement } from '../../services/settings.js';
 import { parseCsv } from '../../util/csv.js';
 import { addDays, todayInZone } from '../../util/dates.js';
+import { cleanGstin, cleanPincode } from '../../util/gst.js';
 import { cleanPhone } from '../../util/phone.js';
 import { cleanQuery, idParam, Where } from './helpers.js';
+
+/** Checked text field: empty becomes null, a wrong value is refused with the checker's message. */
+const checked = (clean: (raw: string | null | undefined) => { value: string | null; error?: string }) =>
+  z
+    .string()
+    .max(40)
+    .nullable()
+    .transform((raw, ctx) => {
+      const r = clean(raw);
+      if (r.error) {
+        ctx.addIssue({ code: 'custom', message: r.error });
+        return z.NEVER;
+      }
+      return r.value;
+    });
 
 const storeSchema = z.object({
   areaId: z.number().int().positive(),
@@ -16,6 +32,9 @@ const storeSchema = z.object({
   ownerName: z.string().trim().max(120).optional().nullable(),
   phone: z.string().trim().max(20).optional().nullable(),
   address: z.string().trim().max(300).optional().nullable(),
+  // For Tally: a shop with a GSTIN is "Regular", without one "Unregistered/Consumer".
+  pincode: checked(cleanPincode).optional(),
+  gstin: checked(cleanGstin).optional(),
   notes: z.string().trim().max(500).optional().nullable(),
   isActive: z.boolean().optional(),
 });
@@ -31,7 +50,7 @@ const listSchema = z.object({
 });
 
 const STORE_COLUMNS = `st.id, st.name, st.area_id AS "areaId", a.name AS "areaName", st.owner_name AS "ownerName",
-  st.phone, st.address, st.notes, st.is_active AS "isActive", st.created_at AS "createdAt",
+  st.phone, st.address, st.pincode, st.gstin, st.notes, st.is_active AS "isActive", st.created_at AS "createdAt",
   st.created_by_driver_id AS "createdByDriverId", d.name AS "createdByDriverName"`;
 
 const STORE_FROM = `FROM stores st JOIN areas a ON a.id = st.area_id LEFT JOIN drivers d ON d.id = st.created_by_driver_id`;
@@ -43,7 +62,7 @@ function sqlLower(text: string): string {
   return text.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
-const HEADER_ALIASES: Record<string, 'area' | 'name' | 'owner' | 'phone' | 'address' | 'notes'> = {
+const HEADER_ALIASES: Record<string, 'area' | 'name' | 'owner' | 'phone' | 'address' | 'pincode' | 'gstin' | 'notes'> = {
   area: 'area',
   'area name': 'area',
   locality: 'area',
@@ -64,6 +83,16 @@ const HEADER_ALIASES: Record<string, 'area' | 'name' | 'owner' | 'phone' | 'addr
   'mobile number': 'phone',
   address: 'address',
   landmark: 'address',
+  pincode: 'pincode',
+  'pin code': 'pincode',
+  pin: 'pincode',
+  'postal code': 'pincode',
+  gstin: 'gstin',
+  'gstin/uin': 'gstin',
+  gst: 'gstin',
+  'gst no': 'gstin',
+  'gst no.': 'gstin',
+  'gst number': 'gstin',
   notes: 'notes',
   note: 'notes',
   remarks: 'notes',
@@ -192,14 +221,16 @@ export function storesRouter(config: Config, db: Db): Router {
     try {
       const [inserted] = await db.batch([
         {
-          sql: `INSERT INTO stores (area_id, name, owner_name, phone, address, notes, is_active, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, coalesce(?7, 1), ?8, ?8) RETURNING id`,
+          sql: `INSERT INTO stores (area_id, name, owner_name, phone, address, pincode, gstin, notes, is_active, created_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, coalesce(?9, 1), ?10, ?10) RETURNING id`,
           params: [
             body.areaId,
             body.name,
             body.ownerName || null,
             cleanPhone(body.phone),
             body.address || null,
+            body.pincode ?? null,
+            body.gstin ?? null,
             body.notes || null,
             body.isActive ?? null,
             nowIso(),
@@ -233,7 +264,9 @@ export function storesRouter(config: Config, db: Db): Router {
                    address = CASE WHEN ?8 THEN ?9 ELSE address END,
                    notes = CASE WHEN ?10 THEN ?11 ELSE notes END,
                    is_active = coalesce(?12, is_active),
-                   updated_at = ?13
+                   updated_at = ?13,
+                   pincode = CASE WHEN ?14 THEN ?15 ELSE pincode END,
+                   gstin = CASE WHEN ?16 THEN ?17 ELSE gstin END
                  WHERE id = ?1`,
           params: [
             id,
@@ -249,6 +282,10 @@ export function storesRouter(config: Config, db: Db): Router {
             body.notes || null,
             body.isActive ?? null,
             nowIso(),
+            has('pincode'),
+            body.pincode ?? null,
+            has('gstin'),
+            body.gstin ?? null,
           ],
         },
         bumpCatalogStatement(),
@@ -263,7 +300,7 @@ export function storesRouter(config: Config, db: Db): Router {
 
   /**
    * Bulk import from CSV / pasted Excel cells. Columns (header row required, any order):
-   * Area, Shop name, Owner, Phone, Address, Notes. Missing areas are created.
+   * Area, Shop name, Owner, Phone, Address, Pincode, GSTIN, Notes. Missing areas are created.
    * Shops that already exist (same name in the same area) are skipped, so the same file can be imported twice.
    * Everything is saved in one transaction.
    */
@@ -298,8 +335,9 @@ export function storesRouter(config: Config, db: Db): Router {
     // Area key -> existing area id, or the exact name of an area this import creates.
     const areas = new Map<string, number | string>(areaRows.map((a) => [sqlLower(a.name), a.id]));
     const existing = new Set(storeRows.map((s) => `${s.areaId}:${sqlLower(s.name)}`));
-    const newStores: Array<[number | null, string | null, string, string | null, string | null, string | null, string | null]> =
-      [];
+    const newStores: Array<
+      [number | null, string | null, string, string | null, string | null, string | null, string | null, string | null, string | null]
+    > = [];
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
@@ -312,6 +350,12 @@ export function storesRouter(config: Config, db: Db): Router {
       }
       if (name.length > 120 || areaName.length > 80) {
         result.errors.push({ line, message: 'Name is too long' });
+        continue;
+      }
+      const pincode = cleanPincode(col(row, 'pincode'));
+      const gstin = cleanGstin(col(row, 'gstin'));
+      if (pincode.error || gstin.error) {
+        result.errors.push({ line, message: (pincode.error ?? gstin.error)! });
         continue;
       }
       let area = areas.get(sqlLower(areaName));
@@ -334,6 +378,8 @@ export function storesRouter(config: Config, db: Db): Router {
         cleanPhone(col(row, 'phone')),
         col(row, 'address').slice(0, 300) || null,
         col(row, 'notes').slice(0, 500) || null,
+        pincode.value,
+        gstin.value,
       ]);
       result.storesCreated++;
     }
@@ -349,10 +395,11 @@ export function storesRouter(config: Config, db: Db): Router {
       }
       for (let i = 0; i < newStores.length; i += IMPORT_CHUNK) {
         statements.push({
-          sql: `INSERT INTO stores (area_id, name, owner_name, phone, address, notes, created_at, updated_at)
+          sql: `INSERT INTO stores (area_id, name, owner_name, phone, address, notes, pincode, gstin, created_at, updated_at)
                 SELECT coalesce(json_extract(j.value, '$[0]'), (SELECT a.id FROM areas a WHERE a.name = json_extract(j.value, '$[1]'))),
                        json_extract(j.value, '$[2]'), json_extract(j.value, '$[3]'), json_extract(j.value, '$[4]'),
-                       json_extract(j.value, '$[5]'), json_extract(j.value, '$[6]'), ?2, ?2
+                       json_extract(j.value, '$[5]'), json_extract(j.value, '$[6]'), json_extract(j.value, '$[7]'),
+                       json_extract(j.value, '$[8]'), ?2, ?2
                   FROM json_each(?1) j`,
           params: [JSON.stringify(newStores.slice(i, i + IMPORT_CHUNK)), now],
         });

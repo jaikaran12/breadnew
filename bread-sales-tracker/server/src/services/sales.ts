@@ -100,18 +100,28 @@ export type SaleRow = Omit<Sale, 'items' | 'returns' | 'priceMismatch'>;
 const MAX_FUTURE_MS = 10 * 60 * 1000;
 const MAX_PAST_MS = 7 * 24 * 60 * 60 * 1000;
 
-export const SALE_SELECT = `
-  SELECT s.id, s.client_id AS "clientId", s.driver_id AS "driverId", d.name AS "driverName",
+const SALE_COLUMNS = `
+         s.id, s.client_id AS "clientId", s.driver_id AS "driverId", d.name AS "driverName",
          s.store_id AS "storeId", st.name AS "storeName", s.area_id AS "areaId", a.name AS "areaName",
          s.sold_at AS "soldAt", s.sale_date AS "saleDate", s.payment_mode AS "paymentMode",
          s.total_paise AS "totalPaise", s.total_quantity AS "totalQuantity", s.discount_paise AS "discountPaise",
          s.returned_quantity AS "returnedQuantity", s.returned_paise AS "returnedPaise", s.status,
          s.cancelled_at AS "cancelledAt", s.cancelled_by AS "cancelledBy", s.cancel_reason AS "cancelReason",
-         s.created_at AS "createdAt"
+         s.created_at AS "createdAt"`;
+
+const SALE_FROM = `
     FROM sales s
     JOIN drivers d ON d.id = s.driver_id
     JOIN stores st ON st.id = s.store_id
     JOIN areas a ON a.id = s.area_id`;
+
+export const SALE_SELECT = `SELECT ${SALE_COLUMNS} ${SALE_FROM}`;
+
+/** Bills plus the shop details the Tally file needs (the shop's current address, pincode and GSTIN). */
+export const SALE_SELECT_WITH_SHOP = `
+  SELECT ${SALE_COLUMNS},
+         st.address AS "storeAddress", st.pincode AS "storePincode", st.gstin AS "storeGstin"
+  ${SALE_FROM}`;
 
 /** Loads the bill lines and returned items for the given sales and attaches them. Keeps the input order. */
 export async function attachItems(db: Db, sales: SaleRow[]): Promise<Sale[]> {
