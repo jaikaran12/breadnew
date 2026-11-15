@@ -101,6 +101,20 @@ fi
 [ -n "$dbid" ] || fail "Could not find or create the D1 database '$NAME'"
 echo "Database $NAME ($dbid)"
 sed "s/$PLACEHOLDER/$dbid/" wrangler.jsonc >"$CONFIG"
+
+# Restore point: the database as it is now, before this version changes it. Cloudflare keeps these
+# (D1 Time Travel) for several days, so a deploy can be undone together with its database changes.
+restore=$(npx wrangler d1 time-travel info "$NAME" -c "$CONFIG" --json 2>/dev/null | js 'j.bookmark' 2>/dev/null || true)
+if [ -n "$restore" ]; then
+  echo "Restore point before this deploy: $restore"
+  echo "  (to put the database back to this moment: npx wrangler d1 time-travel restore $NAME --bookmark=$restore)"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '**Database restore point before this deploy:** `%s` (see README, "Going back to an earlier version")\n\n' "$restore" >>"$GITHUB_STEP_SUMMARY"
+  fi
+else
+  echo "(Could not read a restore point; the deploy continues.)"
+fi
+
 npx wrangler d1 migrations apply "$NAME" --remote -c "$CONFIG"
 
 say "Secrets"
