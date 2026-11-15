@@ -24,6 +24,11 @@ on:
       - 'bread-sales-tracker/**'
       - '.github/workflows/bread-sales.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'To go back to an earlier version: its full commit code from MILESTONES.md. Leave empty for the newest.'
+        required: false
+        default: ''
 
 concurrency:
   group: bread-sales-${{ github.ref }}
@@ -42,6 +47,8 @@ jobs:
         working-directory: bread-sales-tracker/server
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -57,6 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -91,6 +100,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.sha }}
       - name: Build image
         run: docker build -t bread-sales:ci bread-sales-tracker
 
@@ -120,6 +131,8 @@ jobs:
           fi
       - uses: actions/checkout@v4
         if: steps.ready.outputs.ok == 'true'
+        with:
+          ref: ${{ inputs.version || github.sha }}
       - uses: actions/setup-node@v4
         if: steps.ready.outputs.ok == 'true'
         with:
@@ -183,6 +196,7 @@ jobs:
             echo "| Owner website | $URL (username \`owner\`) |"
             echo "| Driver app in a browser | $URL/driver/ |"
             echo "| Android app for drivers | https://github.com/${{ github.repository }}/releases/latest/download/bread-sales.apk |"
+            echo "| Version online | \`${{ inputs.version || github.sha }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   android:
@@ -202,6 +216,8 @@ jobs:
       LIVE_URL: ${{ needs.deploy.outputs.url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version || github.sha }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -246,7 +262,8 @@ jobs:
           if-no-files-found: error
       - name: Prepare release files
         id: release
-        if: github.event_name == 'workflow_dispatch' && env.LIVE_URL != '' && env.ANDROID_KEYSTORE_FILE != ''
+        # Going back to an earlier version needs no new app (the app opens the website), so none is published then.
+        if: github.event_name == 'workflow_dispatch' && inputs.version == '' && env.LIVE_URL != '' && env.ANDROID_KEYSTORE_FILE != ''
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p release

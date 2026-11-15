@@ -158,21 +158,12 @@ If a limit were ever reached, the drivers' phones keep their bills and send them
 
 ### Going back to an earlier version (milestones)
 
-Each finished stage of the app is marked with a **milestone tag** in GitHub (Code → Tags), e.g.
-`milestone-2026-11-15-tally-export` (everything up to the Tally download, before route planning).
-
-* **Put the website, driver app and server back to a milestone:** GitHub → **Actions → Bread Sales →
-  Run workflow** → under “Use workflow from” pick **Tags → the milestone** → **Run workflow**. That version
-  goes online in about 2 minutes (the Android app needs no change: it opens the website).
-* **Your data stays.** Newer versions only *add* to the database (new tables and columns), so an older
-  version keeps working on it and simply ignores what it does not know. Bills made meanwhile are kept.
-* **Only if the data itself must go back too** (rarely needed): every deploy writes a **database restore
-  point** at the top of its run summary (“Database restore point before this deploy: …”), taken just
-  before that version changed the database. With it:
-  `npx wrangler d1 time-travel restore bread-sales --bookmark=<restore point>` (in `bread-sales-tracker/server`,
-  with `CLOUDFLARE_API_TOKEN` set). Cloudflare keeps restore points for several days only, and going back
-  removes everything recorded after that moment — download a backup first.
-* **To continue after a rollback**, run the workflow again from the branch (or push a new change).
+Finished, tested versions are listed in [MILESTONES.md](MILESTONES.md) with their commit code. To put one
+back online: GitHub → **Actions → Bread Sales → Run workflow** → paste the commit code into **“To go back to
+an earlier version”** → **Run workflow** (about 2 minutes; the Android app needs no change). Your data stays:
+newer versions only *add* to the database, so an older version keeps working on it. Only if the data itself
+must go back too, use the **database restore point** that every deploy writes at the top of its run summary
+(details in MILESTONES.md). To return to the newest version, run the workflow again with the box empty.
 
 ### B. Your own server (VPS) with Docker — only if you ever want to leave Cloudflare
 
