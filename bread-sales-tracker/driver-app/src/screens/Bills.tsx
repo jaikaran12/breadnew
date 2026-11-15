@@ -1,10 +1,11 @@
 import { useEffect, useMemo } from 'react';
 import { PaymentTag } from '../components/Bill';
+import { VisitTag } from '../components/Visit';
 import { TopBar } from '../components/ui';
 import { IconAlert, IconCheck, IconClock, IconRefresh, IconReturn, IconWifiOff, IconX } from '../icons';
 import { addDays, dateText, timeText } from '../dates';
 import { rupees } from '../money';
-import { actions, billsForDate, summarize, t, timezone, today, useAppState } from '../store';
+import { actions, billsForDate, noBillVisitsForDate, summarize, t, timezone, today, useAppState } from '../store';
 import type { BillView } from '../types';
 
 export function BillsScreen(props: { date?: string }) {
@@ -21,6 +22,8 @@ export function BillsScreen(props: { date?: string }) {
   }, [date]);
 
   const bills = useMemo(() => billsForDate(s, date), [s, date]);
+  const noBills = useMemo(() => noBillVisitsForDate(s, date), [s, date]);
+  const storeName = (id: number) => s.catalog?.stores.find((x) => x.id === id)?.name ?? `#${id}`;
   const sum = summarize(bills);
   const waiting = bills.filter((b) => b.state === 'pending' || b.state === 'rejected');
   const done = bills.filter((b) => b.state === 'sent' || b.state === 'cancelled');
@@ -130,6 +133,27 @@ export function BillsScreen(props: { date?: string }) {
             </div>
           </>
         )}
+        {noBills.length > 0 && (
+          <>
+            <h2 className="section-title">{t('visitsWithoutBill')} ({noBills.length})</h2>
+            <div className="list" data-testid="no-bill-visits">
+              {noBills.map((v) => (
+                <div key={v.clientId} className="bill-row no-bill-row">
+                  <span className="bill-row-state">
+                    {'pending' in v ? <IconClock size={22} className="wait" /> : <IconCheck size={22} className="ok" />}
+                  </span>
+                  <span className="bill-row-main">
+                    <span className="bill-row-shop">{storeName(v.storeId)}</span>
+                    <span className="bill-row-sub">
+                      {timeText(v.visitedAt, timezone())} · {v.reason ? t(`reason_${v.reason}`) : t('noBill')}{' '}
+                      {'status' in v && <VisitTag status={v.status} distanceM={v.distanceM} />}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </main>
     </div>
   );
@@ -158,6 +182,7 @@ function BillRow(props: { bill: BillView }) {
         <span className="bill-row-sub">
           {timeText(b.soldAt, timezone())}
           {b.id ? ` · #${b.id}` : ''} · {b.totalPaise !== 0 && <PaymentTag mode={b.paymentMode} />}
+          <VisitTag status={b.visitStatus} distanceM={b.visitDistanceM} />
           {b.returns.length > 0 && (
             <span className="tag-return">
               <IconReturn size={14} /> {b.returns.reduce((acc, r) => acc + r.quantity, 0)}

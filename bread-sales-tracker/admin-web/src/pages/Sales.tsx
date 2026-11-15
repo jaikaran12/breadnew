@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { SaleModal } from '../components/SaleModal';
+import { VisitBadge } from '../components/VisitBadge';
 import { Badge, BillBadges, Card, DownloadButton, Empty, ErrorBox, Loading, Modal, PageHeader, Pager, RangePicker, Toggle } from '../components/ui';
 import { fetchSalesForExport, saveCsv, salesCsv } from '../exporting';
 import { dateLabel, dateTime, num, rupees, shortDate, time, todayIn } from '../format';
@@ -230,6 +231,7 @@ export function SalesPage() {
                     </td>
                     <td>
                       <BillBadges sale={sale} />{' '}
+                      <VisitBadge status={sale.visitStatus} distanceM={sale.visitDistanceM} />{' '}
                       {sale.discountPaise > 0 && <Badge tone="green">−{rupees(sale.discountPaise)}</Badge>}{' '}
                       {sale.status === 'cancelled' && (
                         <Badge tone="red" title={`${sale.cancelReason ?? ''} ${dateTime(sale.cancelledAt)}`}>

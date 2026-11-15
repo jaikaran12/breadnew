@@ -3,12 +3,18 @@ import { netLabel, returnsCounted } from '../components/Bill';
 import { IconCheck, IconClock, IconHome, IconNext, IconReturn, IconShare } from '../icons';
 import { rupees } from '../money';
 import { shareText } from '../device';
-import { actions, findBill, t, useAppState } from '../store';
+import { VisitTag } from '../components/Visit';
+import { actions, findBill, t, todaysRoutes, useAppState } from '../store';
 
 export function DoneScreen(props: { billKey: string }) {
   const s = useAppState();
   const bill = findBill(s, props.billKey);
   const nextShop = () => {
+    // On today's route: back to the route, which shows the next shop.
+    if (bill && todaysRoutes(s).some((r) => r.storeIds.includes(bill.storeId))) {
+      actions.reset({ name: 'home' }, { name: 'route' });
+      return;
+    }
     if (bill) {
       const areaId = s.catalog?.stores.find((x) => x.id === bill.storeId)?.areaId ?? s.lastAreaId;
       if (areaId) {
@@ -40,7 +46,7 @@ export function DoneScreen(props: { billKey: string }) {
             )}
             {bill.state === 'sent' ? (
               <div className="status status-ok">
-                <IconCheck size={22} /> {t('sentToOffice')}
+                <IconCheck size={22} /> {t('sentToOffice')} <VisitTag status={bill.visitStatus} distanceM={bill.visitDistanceM} />
               </div>
             ) : (
               <div className="status status-wait">

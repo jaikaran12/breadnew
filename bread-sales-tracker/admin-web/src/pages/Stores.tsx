@@ -26,7 +26,7 @@ async function downloadShopList(progress: (done: number, total: number) => void)
   }
   saveCsv(
     `shops-${todayIn()}.csv`,
-    ['Area', 'Shop name', 'Owner', 'Phone', 'Address', 'Pincode', 'GSTIN', 'Notes', 'Active', 'Last bill', 'Sales last 30 days (Rs)'],
+    ['Area', 'Shop name', 'Owner', 'Phone', 'Address', 'Pincode', 'GSTIN', 'Latitude', 'Longitude', 'Notes', 'Active', 'Last bill', 'Sales last 30 days (Rs)'],
     stores.map((r) => [
       r.areaName,
       r.name,
@@ -35,6 +35,8 @@ async function downloadShopList(progress: (done: number, total: number) => void)
       r.address,
       r.pincode,
       r.gstin,
+      r.lat,
+      r.lng,
       r.notes,
       r.isActive ? 'yes' : 'no',
       r.lastSaleAt ? new Date(r.lastSaleAt).toLocaleString('en-IN', { timeZone: getTimeZone() }) : '',
@@ -52,17 +54,27 @@ export function StoresPage() {
   const [areaId, setAreaId] = useState(params.get('areaId') ?? '');
   const [status, setStatus] = useState<'active' | 'inactive' | 'all'>('active');
   const [notVisited, setNotVisited] = useState('');
+  const [location, setLocation] = useState(params.get('location') ?? '');
   const [sort, setSort] = useState('area');
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Store | 'new' | null>(null);
   const [importing, setImporting] = useState(false);
 
-  useEffect(() => setPage(1), [search, areaId, status, notVisited, sort]);
+  useEffect(() => setPage(1), [search, areaId, status, notVisited, location, sort]);
 
   const list = useQuery({
-    queryKey: ['stores', { search, areaId, status, notVisited, sort, page }],
+    queryKey: ['stores', { search, areaId, status, notVisited, location, sort, page }],
     queryFn: () =>
-      api.get<StoreList>('/stores', { q: search, areaId, status, notVisitedDays: notVisited, sort, page, pageSize: 100 }),
+      api.get<StoreList>('/stores', {
+        q: search,
+        areaId,
+        status,
+        notVisitedDays: notVisited,
+        location: location || undefined,
+        sort,
+        page,
+        pageSize: 100,
+      }),
   });
 
   return (
@@ -118,6 +130,11 @@ export function StoresPage() {
             <option value="7">No bill for 7+ days</option>
             <option value="30">No bill for 30+ days</option>
           </select>
+          <select value={location} onChange={(e) => setLocation(e.target.value)} aria-label="Location">
+            <option value="">Any location</option>
+            <option value="missing">No location yet</option>
+            <option value="check">Location from a driver, to check</option>
+          </select>
           <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort">
             <option value="area">Sort: area</option>
             <option value="name">Sort: name</option>
@@ -156,6 +173,15 @@ export function StoresPage() {
                         {s.discountCount ? (
                           <Badge tone="green" title={`${s.discountCount} product(s) at a special rate`}>
                             discount
+                          </Badge>
+                        ) : null}{' '}
+                        {s.lat === null ? (
+                          <Badge tone="gray" title="No map location: visits here cannot be checked">
+                            no location
+                          </Badge>
+                        ) : s.locationStatus === 'driver' ? (
+                          <Badge tone="blue" title="A driver saved the location at the shop; check it on the shop's page">
+                            location to check
                           </Badge>
                         ) : null}
                         <div className="muted small">{[s.ownerName, s.address].filter(Boolean).join(' · ')}</div>
@@ -358,13 +384,14 @@ function ImportDialog(props: { open: boolean; onClose: () => void }) {
       <ol className="import-help">
         <li>
           Make a sheet in Excel / Google Sheets with columns <b>Area</b>, <b>Shop name</b> and optionally <b>Owner</b>,{' '}
-          <b>Phone</b>, <b>Address</b>, <b>Pincode</b>, <b>GSTIN</b>. (<a href={sampleUrl} download="shops-sample.csv">download a sample</a>)
+          <b>Phone</b>, <b>Address</b>, <b>Pincode</b>, <b>GSTIN</b>, <b>Latitude</b> and <b>Longitude</b> (or one <b>Location</b>{' '}
+          column with “32.7311, 74.8573” or a Google Maps link). (<a href={sampleUrl} download="shops-sample.csv">download a sample</a>)
         </li>
         <li>Copy the cells (including the heading row) and paste below, or upload the file saved as CSV.</li>
         <li>
           Click “Check”, then “Import”. New areas are created; shops already in the list are not added again, but their
-          Pincode and GSTIN are filled in from your sheet. Tip: download the shop list, fill in those two columns in Excel,
-          and import it back.
+          Pincode, GSTIN and location are filled in from your sheet. Tip: download the shop list, fill in those columns in
+          Excel, and import it back.
         </li>
       </ol>
       <textarea

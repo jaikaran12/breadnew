@@ -14,6 +14,7 @@ export function SettingsPage() {
       <div className="grid-2">
         <BackupCard />
         <BusinessCard />
+      <VisitCheckCard />
       </div>
       <div className="grid-2">
         <PasswordCard />
@@ -222,6 +223,55 @@ function AdminsCard() {
         <div>
           <button className="btn btn-light" disabled={add.isPending}>
             Add person
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
+/** How far from a shop's saved location a driver may be when making a bill or "no bill". */
+function VisitCheckCard() {
+  const { me, refresh } = useAuth();
+  const [radius, setRadius] = useState('');
+  useEffect(() => {
+    if (me) setRadius(String(me.settings.visitRadiusM ?? 100));
+  }, [me]);
+  const save = useMutation({
+    mutationFn: () => api.put('/settings', { visitRadiusM: Number(radius) }),
+    onSuccess: () => {
+      toast('Saved. Drivers get it the next time their phone has internet.');
+      void refresh();
+    },
+  });
+  return (
+    <Card title="Visit check (GPS)">
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <Field
+          label="Allowed distance from the shop (metres)"
+          hint="When a driver makes a bill or “no bill”, the phone must be within this distance of the shop's saved location, or the visit is flagged as too far. Phone GPS is usually right to 5–30 m; in narrow lanes allow 100–150 m."
+        >
+          <input
+            type="number"
+            min={20}
+            max={5000}
+            step={10}
+            value={radius}
+            onChange={(e) => setRadius(e.target.value)}
+            required
+            aria-label="Allowed distance in metres"
+          />
+        </Field>
+        <ErrorBox error={save.error} />
+        <div>
+          <button className="btn btn-primary" disabled={save.isPending}>
+            Save
           </button>
         </div>
       </form>

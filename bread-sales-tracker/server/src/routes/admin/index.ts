@@ -6,10 +6,12 @@ import { requireAdmin, sameOriginOnly } from '../../auth.js';
 import { adminAccountRouter, adminPublicRouter } from './account.js';
 import { areasRouter } from './areas.js';
 import { dashboardRouter } from './dashboard.js';
+import { deliveryRoutesRouter } from './deliveryRoutes.js';
 import { discountsRouter, storeDiscountsRouter } from './discounts.js';
 import { driversRouter } from './drivers.js';
 import { productsRouter } from './products.js';
 import { reportsRouter } from './reports.js';
+import { routeCheckRouter } from './routeCheck.js';
 import { salesRouter } from './sales.js';
 import { storesRouter } from './stores.js';
 import { tallyRouter } from './tally.js';
@@ -34,6 +36,8 @@ export function adminRouter(config: Config, db: Db, loginLimiter: RequestHandler
   router.use('/discounts', discountsRouter(db));
   router.use('/products', productsRouter(db));
   router.use('/drivers', driversRouter(config, db));
+  router.use('/routes', deliveryRoutesRouter(db));
+  router.use('/route-check', routeCheckRouter(config, db));
   router.use((_req, _res) => {
     throw notFound();
   });

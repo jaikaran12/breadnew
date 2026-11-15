@@ -2,6 +2,8 @@ import { useSyncExternalStore } from 'react';
 import { api, ApiError, configureApi, isTemporaryFailure, NetworkError } from './api';
 import { lineDiscount, type DiscountRule } from './billMath';
 import { dateIn } from './dates';
+import { weekday } from './geo';
+import type { Fix } from './location';
 import { translate, type MessageKey } from './i18n';
 import { load, save } from './storage';
 import type {
@@ -12,11 +14,15 @@ import type {
   DayHistory,
   Draft,
   Lang,
+  NoBillReason,
   PaymentMode,
   PendingSale,
+  PendingVisit,
   ReturnLine,
+  Route,
   Screen,
   ServerSale,
+  ServerVisit,
   Store,
 } from './types';
 import { uuid } from './uuid';
@@ -39,6 +45,8 @@ export interface State {
   catalogAt: number | null;
   catalogLoading: boolean;
   outbox: PendingSale[];
+  /** "No bill" visits waiting to be sent. */
+  visitOutbox: PendingVisit[];
   history: Record<string, DayHistory>;
   historyLoading: boolean;
   online: boolean;
@@ -59,6 +67,7 @@ const PERSISTED: Array<keyof State> = [
   'catalog',
   'catalogAt',
   'outbox',
+  'visitOutbox',
   'history',
   'draft',
   'lastAreaId',
@@ -73,6 +82,7 @@ let state: State = {
   catalogAt: load<number | null>('catalogAt', null),
   catalogLoading: false,
   outbox: load<PendingSale[]>('outbox', []),
+  visitOutbox: load<PendingVisit[]>('visitOutbox', []),
   history: load<Record<string, DayHistory>>('history', {}),
   historyLoading: false,
   online: typeof navigator === 'undefined' ? true : navigator.onLine !== false,
@@ -258,6 +268,8 @@ export function billsForDate(s: State, date: string): BillView[] {
     returns: returnsFromServer(x),
     state: x.status === 'cancelled' ? 'cancelled' : 'sent',
     cancelledBy: x.cancelledBy,
+    visitStatus: x.visitStatus ?? null,
+    visitDistanceM: x.visitDistanceM ?? null,
   }));
   return [...pending, ...sent].sort((a, b) => b.soldAt.localeCompare(a.soldAt));
 }
@@ -317,7 +329,7 @@ export function myPendingCount(s: State): { waiting: number; rejected: number; o
   let waiting = 0;
   let rejected = 0;
   let otherDriver = 0;
-  for (const o of s.outbox) {
+  for (const o of [...s.outbox, ...s.visitOutbox]) {
     if (o.driverId !== id) otherDriver++;
     else if (o.rejected) rejected++;
     else waiting++;
@@ -407,6 +419,114 @@ export function linesTotal(lines: BillLine[]): { totalPaise: number; quantity: n
 
 export function returnsCount(returns: ReturnLine[]): number {
   return returns.reduce((acc, r) => acc + r.quantity, 0);
+}
+
+// ---------- routes and visits ----------
+
+/** The driver's routes that run today (by weekday). */
+export function todaysRoutes(s: State, date = today()): Route[] {
+  const day = String(weekday(date));
+  return (s.catalog?.routes ?? []).filter((r) => r.days.includes(day));
+}
+
+/** "No bill" visits of a day: from the server and still on the phone. */
+export function noBillVisitsForDate(s: State, date: string): Array<ServerVisit | (PendingVisit & { pending: true })> {
+  const driverId = s.auth?.driver.id;
+  const server = s.history[date]?.visits ?? [];
+  const seen = new Set(server.map((v) => v.clientId));
+  const pending = s.visitOutbox
+    .filter((v) => v.driverId === driverId && v.visitDate === date && !seen.has(v.clientId))
+    .map((v) => ({ ...v, pending: true as const }));
+  return [...pending, ...server];
+}
+
+export interface RouteStop {
+  position: number;
+  store: Store;
+  areaName: string;
+  /** What happened at this shop today. */
+  done: { kind: 'bill'; totalPaise: number } | { kind: 'no_bill'; reason: NoBillReason | null } | null;
+}
+
+/** A route's shops in order with what is done today, the next shop to go to, and how many are done. */
+export function routeProgress(s: State, route: Route, date = today()): { stops: RouteStop[]; next: RouteStop | null; done: number } {
+  const bills = new Map<number, number>();
+  for (const b of billsForDate(s, date)) if (b.state !== 'cancelled') bills.set(b.storeId, (bills.get(b.storeId) ?? 0) + b.totalPaise);
+  const noBills = new Map<number, NoBillReason | null>();
+  for (const v of noBillVisitsForDate(s, date)) if (!noBills.has(v.storeId)) noBills.set(v.storeId, v.reason);
+  const storeById = new Map((s.catalog?.stores ?? []).map((st) => [st.id, st]));
+  const areaName = (id: number) => s.catalog?.areas.find((a) => a.id === id)?.name ?? '';
+  const stops: RouteStop[] = [];
+  for (const storeId of route.storeIds) {
+    const store = storeById.get(storeId);
+    if (!store) continue; // removed by the owner
+    const done: RouteStop['done'] = bills.has(storeId)
+      ? { kind: 'bill', totalPaise: bills.get(storeId)! }
+      : noBills.has(storeId)
+        ? { kind: 'no_bill', reason: noBills.get(storeId)! }
+        : null;
+    stops.push({ position: stops.length + 1, store, areaName: areaName(store.areaId), done });
+  }
+  return { stops, next: stops.find((x) => !x.done) ?? null, done: stops.filter((x) => x.done).length };
+}
+
+/** The shop's saved location, if any. */
+export function shopLocation(store: Store): { lat: number; lng: number } | null {
+  return typeof store.lat === 'number' && typeof store.lng === 'number' ? { lat: store.lat, lng: store.lng } : null;
+}
+
+/** Google Maps directions to a shop (by its location, or by name and address when it has none). */
+export function directionsUrl(store: Store, areaName = ''): string {
+  const at = shopLocation(store);
+  if (at) return `https://www.google.com/maps/dir/?api=1&destination=${at.lat},${at.lng}&travelmode=driving`;
+  const query = [store.name, store.address, areaName].filter(Boolean).join(', ');
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
+/** Google Maps with the next shops of the route as stops (Maps takes at most 9 stops on the way). */
+export function routeMapsUrl(stops: RouteStop[]): string | null {
+  const points = stops.map((x) => shopLocation(x.store)).filter((p): p is { lat: number; lng: number } => Boolean(p)).slice(0, 10);
+  if (points.length === 0) return null;
+  const last = points[points.length - 1];
+  const via = points.slice(0, -1).map((p) => `${p.lat},${p.lng}`).join('|');
+  return `https://www.google.com/maps/dir/?api=1&destination=${last.lat},${last.lng}&travelmode=driving${via ? `&waypoints=${encodeURIComponent(via)}` : ''}`;
+}
+
+/** Sends the "no bill" visits waiting on the phone. Returns true if it must try again later (no internet). */
+async function sendVisits(driverId: number): Promise<boolean> {
+  for (const visit of state.visitOutbox.filter((o) => o.driverId === driverId && !o.rejected)) {
+    try {
+      const res = await api.createVisit({
+        clientId: visit.clientId,
+        storeId: visit.storeId,
+        reason: visit.reason,
+        ...(visit.note ? { note: visit.note } : {}),
+        visitedAt: visit.visitedAt,
+        location: visit.location,
+        routeId: visit.routeId,
+      });
+      setState((s) => {
+        const day = s.history[res.visit.visitDate] ?? { date: res.visit.visitDate, sales: [], settled: false, fetchedAt: 0 };
+        const visits = [res.visit, ...(day.visits ?? []).filter((v) => v.clientId !== res.visit.clientId)];
+        return {
+          visitOutbox: s.visitOutbox.filter((o) => o.clientId !== visit.clientId),
+          history: pruneHistory({ ...s.history, [res.visit.visitDate]: { ...day, visits } }, [res.visit.visitDate]),
+          online: true,
+        };
+      });
+    } catch (err) {
+      noteError(err);
+      if (err instanceof ApiError && err.status === 401) return false;
+      const temporary = isTemporaryFailure(err);
+      setState((s) => ({
+        visitOutbox: s.visitOutbox.map((o) =>
+          o.clientId === visit.clientId ? { ...o, attempts: o.attempts + 1, lastError: errorText(err), rejected: !temporary } : o,
+        ),
+      }));
+      if (temporary) return true;
+    }
+  }
+  return false;
 }
 
 // ---------- background work ----------
@@ -506,7 +626,8 @@ export function syncNow(): Promise<void> {
     const auth = state.auth;
     if (!auth) return;
     const queue = state.outbox.filter((o) => o.driverId === auth.driver.id && !o.rejected);
-    if (queue.length === 0) return;
+    const visitQueue = state.visitOutbox.filter((o) => o.driverId === auth.driver.id && !o.rejected);
+    if (queue.length === 0 && visitQueue.length === 0) return;
     setState({ syncing: true });
     let mustRetry = false;
     let catalogChanged = false;
@@ -530,6 +651,7 @@ export function syncNow(): Promise<void> {
               : { productId: r.productId, quantity: r.quantity, unitPricePaise: r.unitPricePaise, ...(r.discount ? { discount: r.discount } : {}) },
           ),
           totalPaise: sale.totalPaise,
+          ...(sale.visit ? { visit: sale.visit } : {}),
         });
         setState((s) => ({
           outbox: s.outbox.filter((o) => o.clientId !== sale.clientId),
@@ -556,6 +678,7 @@ export function syncNow(): Promise<void> {
         }
       }
     }
+    if (!mustRetry) mustRetry = await sendVisits(auth.driver.id);
     setState({ syncing: false });
     if (mustRetry) scheduleRetry();
     else retryDelay = 5000;
@@ -576,8 +699,14 @@ async function loadDay(date: string): Promise<void> {
       const previous = s.history[date]?.sales ?? [];
       const ids = new Set(res.sales.map((x) => x.clientId));
       const merged = [...res.sales, ...previous.filter((x) => !ids.has(x.clientId))];
+      const serverVisits = res.visits ?? [];
+      const visitIds = new Set(serverVisits.map((v) => v.clientId));
+      const visits = [...serverVisits, ...(s.history[date]?.visits ?? []).filter((v) => !visitIds.has(v.clientId))];
       return {
-        history: pruneHistory({ ...s.history, [date]: { date, sales: merged, settled: res.settled, fetchedAt: Date.now() } }, [date]),
+        history: pruneHistory(
+          { ...s.history, [date]: { date, sales: merged, visits, settled: res.settled, fetchedAt: Date.now() } },
+          [date],
+        ),
         online: true,
       };
     });
@@ -662,10 +791,13 @@ export const actions = {
   },
 
   // Bill making
-  startBill(store: Store, areaName: string) {
+  startBill(store: Store, areaName: string, routeId: number | null = null) {
     void checkCatalogVersion();
     const d = state.draft;
-    if (d && d.storeId === store.id) return; // continue the unfinished bill
+    if (d && d.storeId === store.id) {
+      if (routeId && d.routeId !== routeId) setState({ draft: { ...d, routeId } });
+      return; // continue the unfinished bill
+    }
     setState({
       draft: {
         storeId: store.id,
@@ -676,6 +808,7 @@ export const actions = {
         ret: {},
         mode: 'sale',
         paymentMode: 'cash',
+        routeId,
       },
       lastAreaId: store.areaId,
     });
@@ -705,8 +838,11 @@ export const actions = {
     setState({ draft: null });
   },
 
-  /** Saves the bill on the phone first (never lost), then tries to send it. Returns the bill key. */
-  saveBill(): string | null {
+  /**
+   * Saves the bill on the phone first (never lost), then tries to send it. Returns the bill key.
+   * `location` is where the phone is now (null if the GPS gave nothing); the server checks it against the shop.
+   */
+  saveBill(location: Fix | null = null): string | null {
     const { draft, auth } = state;
     if (!draft || !auth) return null;
     const lines = draftLines(state);
@@ -730,11 +866,52 @@ export const actions = {
       totalQuantity: quantity,
       returnedPaise,
       attempts: 0,
+      visit: { location, routeId: draft.routeId ?? null },
     };
     setState((s) => ({ outbox: [...s.outbox, sale], draft: null }));
     retryDelay = 5000;
     void syncNow();
     return sale.clientId;
+  },
+
+  /** A shop visited without a bill: saved on the phone first, then sent (with where the phone was). */
+  saveNoBill(input: { store: Store; reason: NoBillReason; note?: string; location: Fix | null; routeId: number | null }): string | null {
+    const { auth } = state;
+    if (!auth) return null;
+    const now = new Date();
+    const visit: PendingVisit = {
+      clientId: uuid(),
+      driverId: auth.driver.id,
+      storeId: input.store.id,
+      storeName: input.store.name,
+      reason: input.reason,
+      ...(input.note ? { note: input.note } : {}),
+      visitedAt: now.toISOString(),
+      visitDate: dateIn(timezone(), now),
+      location: input.location,
+      routeId: input.routeId,
+      attempts: 0,
+    };
+    setState((s) => ({ visitOutbox: [...s.visitOutbox, visit] }));
+    retryDelay = 5000;
+    void syncNow();
+    return visit.clientId;
+  },
+
+  /** Saves where a shop is, from the phone standing at it (only for shops without a location; needs internet). */
+  async saveShopLocation(store: Store, fix: Fix): Promise<void> {
+    const res = await api.saveStoreLocation(store.id, fix);
+    setState((s) => ({
+      catalog: s.catalog
+        ? {
+            ...s.catalog,
+            stores: s.catalog.stores.map((x) =>
+              x.id === store.id ? { ...x, lat: res.store.lat, lng: res.store.lng, locationStatus: res.store.locationStatus } : x,
+            ),
+          }
+        : s.catalog,
+      online: true,
+    }));
   },
 
   async cancelBill(bill: BillView): Promise<void> {

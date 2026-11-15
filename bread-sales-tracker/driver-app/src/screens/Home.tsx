@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Confirm, Modal } from '../components/ui';
-import { IconAlert, IconCheck, IconClock, IconList, IconLogout, IconPlus, IconRefresh, IconWifiOff } from '../icons';
+import { IconAlert, IconCheck, IconClock, IconList, IconLogout, IconNext, IconPlus, IconRefresh, IconRoute, IconWifiOff } from '../icons';
 import { LANGS } from '../i18n';
 import { rupees } from '../money';
 import {
@@ -9,11 +9,13 @@ import {
   billsForDate,
   errorText,
   myPendingCount,
+  routeProgress,
   showToast,
   summarize,
   t,
   timezone,
   today,
+  todaysRoutes,
   useAppState,
 } from '../store';
 
@@ -24,6 +26,8 @@ export function HomeScreen() {
   const todayDate = today();
   const totals = useMemo(() => summarize(billsForDate(s, todayDate)), [s, todayDate]);
   const pending = myPendingCount(s);
+  const routes = useMemo(() => todaysRoutes(s, todayDate), [s, todayDate]);
+  const progress = useMemo(() => routes.map((r) => ({ route: r, ...routeProgress(s, r, todayDate) })), [s, routes, todayDate]);
 
   const refresh = async () => {
     try {
@@ -120,6 +124,24 @@ export function HomeScreen() {
             </button>
           </div>
         )}
+
+        {progress.map(({ route, stops, next, done }) => (
+          <button key={route.id} className="route-card" onClick={() => actions.go({ name: 'route' })} data-testid="route-card">
+            <span className="route-card-icon">
+              <IconRoute size={34} />
+            </span>
+            <span className="route-card-text">
+              <span className="route-card-title">
+                {t('todaysRoute')}: {route.name}
+              </span>
+              <span className="route-card-sub">{t('stopsDone', { done, total: stops.length })}</span>
+              <span className="route-card-next">{next ? `${t('nextStop')}: ${next.store.name}` : t('routeFinished')}</span>
+            </span>
+            <span className="route-card-go">
+              {t('continueRoute')} <IconNext size={22} />
+            </span>
+          </button>
+        ))}
 
         <button className="big-action big-green" onClick={startNewBill} disabled={!s.catalog}>
           <span className="big-icon">

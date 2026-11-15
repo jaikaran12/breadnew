@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BillTable, PAYMENT_ICON, paymentLabel } from '../components/Bill';
+import { GpsCheck } from '../components/Visit';
+import { waitForFix } from '../location';
 import { TopBar } from '../components/ui';
 import { IconCheck } from '../icons';
 import { actions, billTotals, draftLines, draftReturns, t, useAppState } from '../store';
@@ -20,13 +22,16 @@ export function ReviewScreen() {
   if (!draft || empty) return null;
   const { totalPaise, quantity } = billTotals(lines, returns);
 
-  const save = () => {
+  const save = async () => {
     if (saving) return;
     setSaving(true);
-    const key = actions.saveBill();
+    // Where the phone is now (waits a few seconds for the GPS if needed; the bill is saved either way).
+    const location = await waitForFix();
+    const key = actions.saveBill(location);
     if (key) actions.reset({ name: 'home' }, { name: 'done', key });
     else setSaving(false);
   };
+  const store = s.catalog?.stores.find((x) => x.id === draft.storeId);
 
   return (
     <div className="screen screen-with-bar">
@@ -36,6 +41,7 @@ export function ReviewScreen() {
           <div className="bill-shop">{draft.storeName}</div>
           <BillTable lines={lines} totalPaise={totalPaise} quantity={quantity} returns={returns} />
         </div>
+        {store && <GpsCheck store={store} />}
         {/* Nothing to collect when the expired items taken back are worth exactly what was given. */}
         {totalPaise === 0 && <div className="nothing-to-pay">{t('nothingToPay')}</div>}
         {totalPaise !== 0 && <h2 className="section-title">{totalPaise > 0 ? t('howPaid') : t('howGiveBack')}</h2>}
@@ -65,8 +71,8 @@ export function ReviewScreen() {
         <button className="btn btn-light" onClick={() => actions.back()}>
           {t('editBill')}
         </button>
-        <button className="btn btn-green btn-save" onClick={save} disabled={saving}>
-          <IconCheck size={28} /> {t('saveBill')}
+        <button className="btn btn-green btn-save" onClick={() => void save()} disabled={saving}>
+          <IconCheck size={28} /> {saving ? t('gettingLocation') : t('saveBill')}
         </button>
       </div>
     </div>

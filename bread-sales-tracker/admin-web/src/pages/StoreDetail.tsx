@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { DiscountEditor } from '../components/DiscountEditor';
 import { SaleModal } from '../components/SaleModal';
+import { ShopLocationCard } from '../components/ShopLocation';
 import { Badge, Card, Empty, ErrorBox, InlineBar, Loading, PageHeader, BillBadges, Stat } from '../components/ui';
 import { ago, dateLabel, dateTime, discountLabel, num, priceAfter, rupees, time } from '../format';
 import type { Sale, Store } from '../types';
@@ -108,6 +109,7 @@ export function StoreDetailPage() {
           hint={`${num(stats.billsAllTime)} bills${stats.firstSaleAt ? ` since ${dateTime(stats.firstSaleAt)}` : ''}`}
         />
       </div>
+      <ShopLocationCard key={`${store.id}-${store.lat}-${store.lng}-${store.locationStatus}`} store={store} />
       <Card
         title="Special rates for this shop"
         actions={

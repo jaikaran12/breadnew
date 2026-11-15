@@ -1,4 +1,6 @@
 import type { DiscountRule } from './billMath';
+import type { VisitStatus } from './geo';
+import type { Fix } from './location';
 
 export type PaymentMode = 'cash' | 'upi' | 'credit';
 export type Lang = 'en' | 'hi';
@@ -26,6 +28,19 @@ export interface Store {
   ownerName: string | null;
   phone: string | null;
   address: string | null;
+  /** Saved location (missing in lists downloaded by older app versions; null = none yet). */
+  lat?: number | null;
+  lng?: number | null;
+  /** Who placed it: 'owner', or 'driver' (saved at the shop, not checked by the owner yet). */
+  locationStatus?: 'owner' | 'driver' | null;
+}
+
+/** One of the driver's routes: the shops in order, on the days of the week it runs (1 = Monday … 7 = Sunday). */
+export interface Route {
+  id: number;
+  name: string;
+  days: string;
+  storeIds: number[];
 }
 
 export interface Product {
@@ -58,6 +73,10 @@ export interface Catalog {
   products: Product[];
   /** Missing in lists downloaded by older app versions. */
   discounts?: Discount[];
+  /** The driver's routes (missing in lists downloaded by older app versions). */
+  routes?: Route[];
+  /** How far (metres) from a shop the driver may be when making a bill or "no bill". */
+  visitRadiusM?: number;
 }
 
 export interface BillLine {
@@ -110,6 +129,43 @@ export interface PendingSale {
   lastError?: string;
   /** The server refused this bill (not a network problem). Needs the owner's help. */
   rejected?: boolean;
+  /** Where the phone was when the bill was saved, and the route followed (missing in older bills). */
+  visit?: { location: Fix | null; routeId: number | null };
+}
+
+/** Why a shop was visited without a bill. */
+export type NoBillReason = 'closed' | 'stock_ok' | 'owner_away' | 'other';
+
+/** A "no bill" visit saved on the phone that has not reached the server yet. */
+export interface PendingVisit {
+  clientId: string;
+  driverId: number;
+  storeId: number;
+  storeName: string;
+  reason: NoBillReason;
+  note?: string;
+  visitedAt: string;
+  visitDate: string;
+  location: Fix | null;
+  routeId: number | null;
+  attempts: number;
+  lastError?: string;
+  rejected?: boolean;
+}
+
+/** A "no bill" visit as stored on the server, with its location check. */
+export interface ServerVisit {
+  id: number;
+  clientId: string;
+  storeId: number;
+  kind: 'bill' | 'no_bill';
+  reason: NoBillReason | null;
+  visitedAt: string;
+  visitDate: string;
+  routeId: number | null;
+  status: VisitStatus;
+  distanceM: number | null;
+  radiusM: number;
 }
 
 /** A bill as stored on the server. */
@@ -128,6 +184,9 @@ export interface ServerSale {
   discountPaise?: number;
   returnedQuantity?: number;
   returnedPaise?: number;
+  /** Location check (missing for bills made before visits were recorded). */
+  visitStatus?: VisitStatus | null;
+  visitDistanceM?: number | null;
   status: 'completed' | 'cancelled';
   cancelledBy: 'driver' | 'admin' | null;
   cancelReason: string | null;
@@ -156,6 +215,8 @@ export interface ServerSale {
 export interface DayHistory {
   date: string;
   sales: ServerSale[];
+  /** "No bill" visits of that day (missing in days saved by older app versions). */
+  visits?: ServerVisit[];
   settled: boolean;
   fetchedAt: number;
 }
@@ -182,6 +243,9 @@ export interface BillView {
   state: BillState;
   error?: string;
   cancelledBy?: 'driver' | 'admin' | null;
+  /** The server's location check (sent bills only). */
+  visitStatus?: VisitStatus | null;
+  visitDistanceM?: number | null;
 }
 
 export interface Draft {
@@ -192,6 +256,8 @@ export interface Draft {
   ret?: Record<number, number>;
   /** Which counts the +/− buttons change: what is sold, or expired bread taken back. */
   mode?: 'sale' | 'return';
+  /** The bill was started from this route (its next shop is shown after saving). */
+  routeId?: number | null;
   paymentMode: PaymentMode;
 }
 
@@ -200,6 +266,7 @@ export type Screen =
   | { name: 'areas' }
   | { name: 'shops'; areaId: number }
   | { name: 'addShop'; areaId: number }
+  | { name: 'route' }
   | { name: 'cart' }
   | { name: 'review' }
   | { name: 'done'; key: string }

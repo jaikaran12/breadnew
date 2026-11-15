@@ -73,7 +73,7 @@ export function createApp(config: Config, db: Db): Express {
         directives: {
           // The site may also be used over plain http on a local network.
           upgradeInsecureRequests: null,
-          'img-src': ["'self'", 'data:', 'blob:'],
+          'img-src': ["'self'", 'data:', 'blob:', 'https://tile.openstreetmap.org'],
         },
       },
       crossOriginResourcePolicy: { policy: 'cross-origin' },

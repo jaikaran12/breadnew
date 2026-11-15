@@ -4,6 +4,7 @@ import { api } from '../api';
 import { dateLabel, dateTime, discountLabel, num, rupees, time } from '../format';
 import type { Sale, SaleReturn } from '../types';
 import { Badge, ErrorBox, Field, Loading, Modal, PaymentBadge, toast } from './ui';
+import { VisitBadge } from './VisitBadge';
 
 export function SaleModal(props: { saleId: number | null; onClose: () => void }) {
   const qc = useQueryClient();
@@ -66,6 +67,14 @@ export function SaleModal(props: { saleId: number | null; onClose: () => void })
             <div>
               <div className="muted small">Payment</div>
               <PaymentBadge mode={sale.paymentMode} />
+            </div>
+            <div>
+              <div className="muted small">Where it was made</div>
+              {sale.visitStatus ? (
+                <VisitBadge status={sale.visitStatus} distanceM={sale.visitDistanceM} />
+              ) : (
+                <span className="muted small">not recorded</span>
+              )}
             </div>
           </div>
           {sale.status === 'cancelled' && (

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Config } from '../../config.js';
 import type { Db } from '../../db.js';
+import { routeCheck } from '../../services/routeCheck.js';
 import { SUMMARY_COLUMNS } from '../../services/sales.js';
 import { addDays, parseDateParam, todayInZone } from '../../util/dates.js';
 
@@ -13,7 +14,7 @@ export function dashboardRouter(config: Config, db: Db): Router {
   router.get('/', async (req, res) => {
     const today = todayInZone(config.appTimezone);
     const date = parseDateParam(req.query.date, today);
-    const [totals, byDriver, byArea, byProduct, returnsByProduct, recent, counts] = await Promise.all([
+    const [totals, byDriver, byArea, byProduct, returnsByProduct, recent, counts, check] = await Promise.all([
       db.first(
         `SELECT ${SUMMARY_COLUMNS},
                 coalesce(sum(total_paise) FILTER (WHERE status = 'cancelled'), 0) AS "cancelledPaise",
@@ -76,8 +77,10 @@ export function dashboardRouter(config: Config, db: Db): Router {
                 (SELECT count(*) FROM drivers WHERE is_active = 1) AS drivers,
                 (SELECT count(*) FROM areas WHERE is_active = 1) AS areas`,
       ),
+      // Route check of the day (planned shops, visits, location verdicts)
+      routeCheck(db, config, date),
     ]);
-    res.json({ date, today, totals, byDriver, byArea, byProduct, returnsByProduct, recent, counts });
+    res.json({ date, today, totals, byDriver, byArea, byProduct, returnsByProduct, recent, counts, routeCheck: check.totals });
   });
 
   /** Sales of the 14 days up to `date` (a separate call: it changes slowly, so the website asks less often). */

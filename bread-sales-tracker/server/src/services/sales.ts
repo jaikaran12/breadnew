@@ -4,6 +4,9 @@ import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import type { PaymentMode } from '../types.js';
 import { dateInZone } from '../util/dates.js';
 import { lineDiscount, MAX_LINE_PAISE, type DiscountRule } from './billMath.js';
+import type { VisitStatus } from './geo.js';
+import { visitRadius } from './settings.js';
+import { usableLocation, visitStatements, type PhoneLocation, type VisitInfo } from './visits.js';
 
 export interface SaleItemInput {
   productId: number;
@@ -33,6 +36,8 @@ export interface SaleInput {
   returns?: ReturnInput[];
   /** Net amount shown on the phone (given − returned). Must match the server's own calculation exactly. */
   totalPaise: number;
+  /** Where the phone was, and the route the driver was following (older app versions send nothing). */
+  visit?: { location?: PhoneLocation | null; routeId?: number | null } | null;
 }
 
 export interface SaleItem {
@@ -91,6 +96,10 @@ export interface Sale {
   createdAt: string;
   /** True if any line used a rate or discount different from the lists on the server when the bill arrived. */
   priceMismatch: boolean;
+  /** Location check of this bill (null for bills made before visits were recorded). */
+  visitStatus: VisitStatus | null;
+  visitDistanceM: number | null;
+  visitRadiusM: number | null;
   items: SaleItem[];
   returns: SaleReturn[];
 }
@@ -107,13 +116,15 @@ const SALE_COLUMNS = `
          s.total_paise AS "totalPaise", s.total_quantity AS "totalQuantity", s.discount_paise AS "discountPaise",
          s.returned_quantity AS "returnedQuantity", s.returned_paise AS "returnedPaise", s.status,
          s.cancelled_at AS "cancelledAt", s.cancelled_by AS "cancelledBy", s.cancel_reason AS "cancelReason",
-         s.created_at AS "createdAt"`;
+         s.created_at AS "createdAt",
+         v.status AS "visitStatus", v.distance_m AS "visitDistanceM", v.radius_m AS "visitRadiusM"`;
 
 const SALE_FROM = `
     FROM sales s
     JOIN drivers d ON d.id = s.driver_id
     JOIN stores st ON st.id = s.store_id
-    JOIN areas a ON a.id = s.area_id`;
+    JOIN areas a ON a.id = s.area_id
+    LEFT JOIN visits v ON v.sale_id = s.id`;
 
 export const SALE_SELECT = `SELECT ${SALE_COLUMNS} ${SALE_FROM}`;
 
@@ -214,9 +225,11 @@ export async function createSale(
   config: Pick<Config, 'appTimezone'>,
   driverId: number,
   input: SaleInput,
-): Promise<{ sale: Sale; created: boolean }> {
+): Promise<{ sale: Sale; created: boolean; visit: VisitInfo | null }> {
+  const visitOf = (sale: Sale): VisitInfo | null =>
+    sale.visitStatus ? { status: sale.visitStatus, distanceM: sale.visitDistanceM, radiusM: sale.visitRadiusM ?? 0 } : null;
   const already = await existingFor(db, input.clientId, driverId);
-  if (already) return { sale: already, created: false };
+  if (already) return { sale: already, created: false, visit: visitOf(already) };
 
   const returns = input.returns ?? [];
   if (input.items.length === 0 && returns.length === 0) throw badRequest('The bill has no items');
@@ -225,8 +238,12 @@ export async function createSale(
   const returnIds = returns.map((r) => r.productId);
   if (new Set(returnIds).size !== returnIds.length) throw badRequest('The same product appears twice in the returns');
 
-  const store = await db.first<{ id: number; areaId: number }>('SELECT id, area_id AS "areaId" FROM stores WHERE id = ?1', [
-    input.storeId,
+  const [store, radiusM] = await Promise.all([
+    db.first<{ id: number; areaId: number; lat: number | null; lng: number | null; locationStatus: 'owner' | 'driver' | null }>(
+      'SELECT id, area_id AS "areaId", lat, lng, location_status AS "locationStatus" FROM stores WHERE id = ?1',
+      [input.storeId],
+    ),
+    visitRadius(db),
   ]);
   if (!store) throw badRequest('Shop not found. Refresh the shop list and try again.');
 
@@ -387,18 +404,33 @@ export async function createSale(
       ],
     });
   }
+  // Every bill is also a visit: where the phone was, checked against the shop's saved location.
+  const visit = visitStatements({
+    clientId: input.clientId,
+    driverId,
+    shop: store,
+    kind: 'bill',
+    saleClientId: input.clientId,
+    visitedAt: soldAt,
+    timezone: config.appTimezone,
+    routeId: input.visit?.routeId ?? null,
+    location: usableLocation(input.visit?.location, deviceSoldAt),
+    deviceVisitedAt: deviceSoldAt,
+    radiusM,
+  });
+  statements.push(...visit.statements);
   try {
     await db.batch(statements);
   } catch (err) {
     // The same bill arrived twice at the same moment: return the copy that won.
     if (isUniqueViolation(err)) {
       const winner = await existingFor(db, input.clientId, driverId);
-      if (winner) return { sale: winner, created: false };
+      if (winner) return { sale: winner, created: false, visit: visitOf(winner) };
     }
     throw err;
   }
   const saved = await db.first<{ id: number }>('SELECT id FROM sales WHERE client_id = ?1', [input.clientId]);
-  return { sale: (await getSale(db, saved!.id))!, created: true };
+  return { sale: (await getSale(db, saved!.id))!, created: true, visit: visit.info };
 }
 
 /** A driver may cancel their own bill for a short time after making it, unless the day is already tallied. */

@@ -7,7 +7,7 @@ import { SaleModal } from '../components/SaleModal';
 import { ago, num, rupees, shortDate, time, todayIn } from '../format';
 import { useAuth } from '../auth';
 import { useIdle } from '../idle';
-import type { Summary } from '../types';
+import type { CheckSummary, Summary } from '../types';
 
 interface Dashboard {
   date: string;
@@ -32,6 +32,8 @@ interface Dashboard {
     areaName: string;
   }>;
   counts: { stores: number; products: number; drivers: number; areas: number };
+  /** Route check of the day: planned shops, visits and location verdicts. */
+  routeCheck?: CheckSummary;
 }
 
 export function DashboardPage() {
@@ -111,6 +113,17 @@ export function DashboardPage() {
               />
             )}
           </div>
+
+          {d.routeCheck && (d.routeCheck.planned > 0 || d.routeCheck.visits > 0) && (
+            <Link className="route-check-strip" to={`/route-check?date=${date}`} data-testid="dashboard-route-check">
+              <strong>Route check:</strong> {num(d.routeCheck.visited)} of {num(d.routeCheck.planned)} planned shops visited
+              {d.routeCheck.missed > 0 && <Badge tone="red">{num(d.routeCheck.missed)} missed</Badge>}
+              {d.routeCheck.far > 0 && <Badge tone="red">{num(d.routeCheck.far)} too far</Badge>}
+              {d.routeCheck.noGps > 0 && <Badge tone="amber">{num(d.routeCheck.noGps)} no GPS</Badge>}
+              {d.routeCheck.ok > 0 && <Badge tone="green">{num(d.routeCheck.ok)} at the shop</Badge>}
+              <span className="route-check-go">Details →</span>
+            </Link>
+          )}
 
           <div className="grid-2">
             <Card title="Drivers" actions={<Link to="/tally">Cash tally →</Link>} flush>

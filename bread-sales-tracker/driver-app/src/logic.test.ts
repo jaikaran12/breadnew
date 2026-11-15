@@ -3,7 +3,7 @@ import { productCode } from './components/ui';
 import { rupees } from './money';
 import { billText } from './billText';
 import { returnsCounted } from './components/Bill';
-import { billTotals, billsForDate, getState, linesTotal, summarize, draftLines, draftReturns, __setStateForTests } from './store';
+import { billTotals, billsForDate, getState, linesTotal, myPendingCount, summarize, draftLines, draftReturns, __setStateForTests } from './store';
 import type { Catalog, PendingSale, ServerSale } from './types';
 
 const catalog: Catalog = {
@@ -439,5 +439,138 @@ describe('new app versions and fresh prices', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+describe('routes and visits on the phone', () => {
+  beforeEach(() => __setStateForTests({ lang: 'en' }));
+  const withRoute: Catalog = {
+    ...catalog,
+    stores: [
+      { id: 7, areaId: 1, name: 'Sharma Kirana', ownerName: null, phone: null, address: 'Main road', lat: 32.73, lng: 74.86, locationStatus: 'owner' },
+      { id: 8, areaId: 1, name: 'Gupta Store', ownerName: null, phone: null, address: null, lat: null, lng: null, locationStatus: null },
+      { id: 9, areaId: 1, name: 'Balaji', ownerName: null, phone: null, address: null, lat: 32.74, lng: 74.87, locationStatus: 'driver' },
+    ],
+    // 2026-11-16 is a Monday (1); "Weekend" runs only on Saturday and Sunday
+    routes: [
+      { id: 3, name: 'Morning', days: '123456', storeIds: [7, 404, 8, 9] },
+      { id: 4, name: 'Weekend', days: '67', storeIds: [9] },
+    ],
+    visitRadiusM: 100,
+  };
+  const auth = { token: 't', driver: { id: 5, name: 'Ramesh', phone: '9000000001' } };
+
+  it("shows today's route in order, what is done and the next shop", async () => {
+    const { routeProgress, todaysRoutes, directionsUrl, routeMapsUrl } = await import('./store');
+    __setStateForTests({ catalog: withRoute, auth, outbox: [], visitOutbox: [], history: {} });
+    expect(todaysRoutes(getState(), '2026-11-16').map((r) => r.name)).toEqual(['Morning']);
+    expect(todaysRoutes(getState(), '2026-11-22').map((r) => r.name)).toEqual(['Weekend']);
+    const route = todaysRoutes(getState(), '2026-11-16')[0];
+    // A bill at Sharma Kirana (sent) and a "no bill" at Balaji (still on the phone)
+    __setStateForTests({
+      history: {
+        '2026-11-16': {
+          date: '2026-11-16',
+          settled: false,
+          fetchedAt: 1,
+          sales: [
+            {
+              id: 1, clientId: 'b1', storeId: 7, storeName: 'Sharma Kirana', areaId: 1, areaName: 'Gandhi Nagar',
+              soldAt: '2026-11-16T04:00:00Z', saleDate: '2026-11-16', paymentMode: 'cash', totalPaise: 8000, totalQuantity: 2,
+              status: 'completed', cancelledBy: null, cancelReason: null, visitStatus: 'ok', visitDistanceM: 12,
+              items: [{ productId: 1, productName: 'Milk Bread 400g', unitPricePaise: 4000, quantity: 2, lineTotalPaise: 8000 }],
+            },
+          ],
+        },
+      },
+      visitOutbox: [
+        {
+          clientId: 'v1', driverId: 5, storeId: 9, storeName: 'Balaji', reason: 'closed', visitedAt: '2026-11-16T05:00:00Z',
+          visitDate: '2026-11-16', location: null, routeId: 3, attempts: 0,
+        },
+      ],
+    });
+    const p = routeProgress(getState(), route, '2026-11-16');
+    // Shop 404 was removed by the owner: skipped, positions stay 1, 2, 3
+    expect(p.stops.map((x) => [x.position, x.store.name, x.done?.kind ?? null])).toEqual([
+      [1, 'Sharma Kirana', 'bill'],
+      [2, 'Gupta Store', null],
+      [3, 'Balaji', 'no_bill'],
+    ]);
+    expect(p.done).toBe(2);
+    expect(p.next?.store.name).toBe('Gupta Store');
+    expect(myPendingCount(getState()).waiting).toBe(1);
+
+    // Directions: by the saved location, or by name and address when there is none
+    expect(directionsUrl(p.stops[0].store)).toBe('https://www.google.com/maps/dir/?api=1&destination=32.73,74.86&travelmode=driving');
+    expect(directionsUrl(p.stops[1].store, 'Gandhi Nagar')).toBe('https://www.google.com/maps/search/?api=1&query=Gupta%20Store%2C%20Gandhi%20Nagar');
+    expect(routeMapsUrl(p.stops)).toBe(
+      'https://www.google.com/maps/dir/?api=1&destination=32.74,74.87&travelmode=driving&waypoints=32.73%2C74.86',
+    );
+  });
+
+  it('sends where the phone was with each bill and each "no bill"', async () => {
+    const { actions } = await import('./store');
+    const fix = { lat: 32.7301, lng: 74.8601, accuracy: 9, at: new Date().toISOString() };
+    __setStateForTests({
+      catalog: withRoute,
+      auth,
+      outbox: [],
+      visitOutbox: [],
+      history: {},
+      draft: { storeId: 7, storeName: 'Sharma Kirana', areaId: 1, areaName: 'Gandhi Nagar', qty: { 1: 1 }, ret: {}, mode: 'sale', paymentMode: 'cash', routeId: 3 },
+    });
+    const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      sent.push({ url: String(url), body });
+      if (String(url).endsWith('/api/driver/visits')) {
+        return new Response(
+          JSON.stringify({
+            created: true,
+            visit: { id: 70, clientId: body.clientId, storeId: body.storeId, kind: 'no_bill', reason: body.reason, visitedAt: body.visitedAt, visitDate: '2026-11-16', routeId: 3, status: 'far', distanceM: 850, radiusM: 100 },
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ error: 'down' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      actions.saveBill(fix);
+      actions.saveNoBill({ store: withRoute.stores[1], reason: 'stock_ok', location: null, routeId: 3 });
+      await actions.syncNow();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    const billCall = sent.find((x) => x.url.endsWith('/api/driver/sales'))!;
+    expect(billCall.body.visit).toEqual({ location: fix, routeId: 3 });
+    // The server was down for bills: the bill waits on the phone, with its location
+    expect(getState().outbox[0].visit).toEqual({ location: fix, routeId: 3 });
+    // The bill failed (temporary), so the visit waits too: sent next time
+    expect(getState().visitOutbox).toHaveLength(1);
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      sent.push({ url: String(url), body });
+      if (String(url).endsWith('/api/driver/visits')) {
+        return new Response(
+          JSON.stringify({
+            created: true,
+            visit: { id: 70, clientId: body.clientId, storeId: body.storeId, kind: 'no_bill', reason: body.reason, visitedAt: body.visitedAt, visitDate: '2026-11-16', routeId: 3, status: 'no_gps', distanceM: null, radiusM: 100 },
+          }),
+          { status: 201, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ error: 'Bill total does not match' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    try {
+      await actions.syncNow();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    const visitCall = sent.find((x) => x.url.endsWith('/api/driver/visits'))!;
+    expect(visitCall.body).toMatchObject({ storeId: 8, reason: 'stock_ok', location: null, routeId: 3 });
+    expect(getState().visitOutbox).toEqual([]);
+    expect(getState().history['2026-11-16'].visits?.map((v) => [v.storeId, v.reason, v.status])).toEqual([[8, 'stock_ok', 'no_gps']]);
   });
 });

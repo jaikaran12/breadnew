@@ -14,6 +14,18 @@ export interface CatalogStore {
   ownerName: string | null;
   phone: string | null;
   address: string | null;
+  /** Saved location (null = none yet), and who placed it: 'owner' or 'driver' (not checked by the owner yet). */
+  lat: number | null;
+  lng: number | null;
+  locationStatus: 'owner' | 'driver' | null;
+}
+
+/** A route of the logged-in driver: the shops in order, on the days of the week it runs (1 = Monday … 7 = Sunday). */
+export interface CatalogRoute {
+  id: number;
+  name: string;
+  days: string;
+  storeIds: number[];
 }
 
 export interface CatalogProduct {
@@ -43,6 +55,9 @@ export interface Catalog {
   stores: CatalogStore[];
   products: CatalogProduct[];
   discounts: CatalogDiscount[];
+  routes: CatalogRoute[];
+  /** How far (metres) from a shop's location the driver may be when making a bill or "no bill". */
+  visitRadiusM: number;
 }
 
 /** Version of the phones' copy of the catalog (cheap: one row). */
@@ -54,11 +69,14 @@ export async function catalogVersion(db: Db, config: Pick<Config, 'driverCancelW
 export async function getCatalog(
   db: Db,
   config: Pick<Config, 'defaultBusinessName' | 'driverCancelWindowMinutes'>,
+  /** The driver whose routes are included (none when not given). */
+  driverId?: number,
 ): Promise<Catalog> {
-  const [areas, stores, products, discounts, settings, version] = await Promise.all([
+  const [areas, stores, products, discounts, settings, version, routeRows] = await Promise.all([
     db.all<CatalogArea>(`SELECT id, name FROM areas WHERE is_active = 1 ORDER BY sort_order, lower(name)`),
     db.all<CatalogStore>(
-      `SELECT s.id, s.area_id AS "areaId", s.name, s.owner_name AS "ownerName", s.phone, s.address
+      `SELECT s.id, s.area_id AS "areaId", s.name, s.owner_name AS "ownerName", s.phone, s.address,
+              s.lat, s.lng, s.location_status AS "locationStatus"
          FROM stores s JOIN areas a ON a.id = s.area_id
         WHERE s.is_active = 1 AND a.is_active = 1
         ORDER BY lower(s.name)`,
@@ -76,6 +94,16 @@ export async function getCatalog(
     ),
     getSettings(db, config),
     catalogVersion(db, config),
+    driverId
+      ? db.all<{ id: number; name: string; days: string; storeIds: string }>(
+          `SELECT r.id, r.name, r.days,
+                  (SELECT json_group_array(store_id) FROM (
+                     SELECT rs.store_id FROM route_stops rs JOIN stores st ON st.id = rs.store_id AND st.is_active = 1
+                      WHERE rs.route_id = r.id ORDER BY rs.position)) AS "storeIds"
+             FROM routes r WHERE r.driver_id = ?1 AND r.is_active = 1 ORDER BY lower(r.name)`,
+          [driverId],
+        )
+      : Promise.resolve([]),
   ]);
   return {
     version,
@@ -87,5 +115,7 @@ export async function getCatalog(
     stores,
     products,
     discounts,
+    routes: routeRows.map((r) => ({ id: r.id, name: r.name, days: r.days, storeIds: JSON.parse(r.storeIds) as number[] })),
+    visitRadiusM: settings.visitRadiusM,
   };
 }

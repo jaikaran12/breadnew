@@ -8,6 +8,7 @@ import { bumpCatalogStatement } from '../../services/settings.js';
 import { parseCsv } from '../../util/csv.js';
 import { addDays, todayInZone } from '../../util/dates.js';
 import { cleanGstin, cleanPincode } from '../../util/gst.js';
+import { parseLatLng } from '../../util/latlng.js';
 import { cleanPhone } from '../../util/phone.js';
 import { cleanQuery, idParam, Where } from './helpers.js';
 
@@ -37,6 +38,8 @@ const storeSchema = z.object({
   gstin: checked(cleanGstin).optional(),
   notes: z.string().trim().max(500).optional().nullable(),
   isActive: z.boolean().optional(),
+  // Where the shop is (set by the owner; null removes it).
+  location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).nullable().optional(),
 });
 
 const listSchema = z.object({
@@ -44,6 +47,8 @@ const listSchema = z.object({
   q: z.string().trim().max(100).optional(),
   status: z.enum(['active', 'inactive', 'all']).default('active'),
   notVisitedDays: z.coerce.number().int().min(1).max(3650).optional(),
+  // 'missing' = no location yet; 'check' = saved by a driver, not checked by the owner yet
+  location: z.enum(['missing', 'check']).optional(),
   sort: z.enum(['name', 'lastVisit', 'sales30', 'area']).default('area'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(1000).default(100),
@@ -51,9 +56,11 @@ const listSchema = z.object({
 
 const STORE_COLUMNS = `st.id, st.name, st.area_id AS "areaId", a.name AS "areaName", st.owner_name AS "ownerName",
   st.phone, st.address, st.pincode, st.gstin, st.notes, st.is_active AS "isActive", st.created_at AS "createdAt",
+  st.lat, st.lng, st.location_status AS "locationStatus", st.location_at AS "locationAt", ld.name AS "locationByDriverName",
   st.created_by_driver_id AS "createdByDriverId", d.name AS "createdByDriverName"`;
 
-const STORE_FROM = `FROM stores st JOIN areas a ON a.id = st.area_id LEFT JOIN drivers d ON d.id = st.created_by_driver_id`;
+const STORE_FROM = `FROM stores st JOIN areas a ON a.id = st.area_id LEFT JOIN drivers d ON d.id = st.created_by_driver_id
+  LEFT JOIN drivers ld ON ld.id = st.location_by_driver_id`;
 
 const DUPLICATE_STORE = 'A shop with this name already exists in this area. Add a landmark to the name to tell them apart.';
 
@@ -62,7 +69,10 @@ function sqlLower(text: string): string {
   return text.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
-const HEADER_ALIASES: Record<string, 'area' | 'name' | 'owner' | 'phone' | 'address' | 'pincode' | 'gstin' | 'notes'> = {
+const HEADER_ALIASES: Record<
+  string,
+  'area' | 'name' | 'owner' | 'phone' | 'address' | 'pincode' | 'gstin' | 'lat' | 'lng' | 'location' | 'notes'
+> = {
   area: 'area',
   'area name': 'area',
   locality: 'area',
@@ -93,6 +103,18 @@ const HEADER_ALIASES: Record<string, 'area' | 'name' | 'owner' | 'phone' | 'addr
   'gst no': 'gstin',
   'gst no.': 'gstin',
   'gst number': 'gstin',
+  latitude: 'lat',
+  lat: 'lat',
+  longitude: 'lng',
+  lng: 'lng',
+  long: 'lng',
+  lon: 'lng',
+  location: 'location',
+  'map location': 'location',
+  'google maps': 'location',
+  'google maps link': 'location',
+  coordinates: 'location',
+  gps: 'location',
   notes: 'notes',
   note: 'notes',
   remarks: 'notes',
@@ -135,6 +157,8 @@ export function storesRouter(config: Config, db: Db): Router {
         `(st.name LIKE ${p} ESCAPE '\\' OR st.owner_name LIKE ${p} ESCAPE '\\' OR st.phone LIKE ${p} ESCAPE '\\' OR st.address LIKE ${p} ESCAPE '\\')`,
       );
     }
+    if (f.location === 'missing') w.raw('st.lat IS NULL');
+    if (f.location === 'check') w.raw(`st.location_status = 'driver'`);
     if (f.notVisitedDays) {
       const cutoff = w.param(new Date(Date.now() - f.notVisitedDays * 86_400_000).toISOString());
       w.raw(`(st.last_sale_at IS NULL OR st.last_sale_at < ${cutoff})`);
@@ -160,6 +184,7 @@ export function storesRouter(config: Config, db: Db): Router {
               (SELECT count(*) FROM store_discounts sd WHERE sd.store_id = st.id) AS "discountCount"
          FROM st JOIN areas a ON a.id = st.area_id
          LEFT JOIN drivers d ON d.id = st.created_by_driver_id
+         LEFT JOIN drivers ld ON ld.id = st.location_by_driver_id
          LEFT JOIN recent r ON r.store_id = st.id
          ${w.sql}
         ORDER BY ${order}`,
@@ -268,7 +293,12 @@ export function storesRouter(config: Config, db: Db): Router {
                    is_active = coalesce(?12, is_active),
                    updated_at = ?13,
                    pincode = CASE WHEN ?14 THEN ?15 ELSE pincode END,
-                   gstin = CASE WHEN ?16 THEN ?17 ELSE gstin END
+                   gstin = CASE WHEN ?16 THEN ?17 ELSE gstin END,
+                   lat = CASE WHEN ?18 THEN ?19 ELSE lat END,
+                   lng = CASE WHEN ?18 THEN ?20 ELSE lng END,
+                   location_status = CASE WHEN ?18 THEN (CASE WHEN ?19 IS NULL THEN NULL ELSE 'owner' END) ELSE location_status END,
+                   location_by_driver_id = CASE WHEN ?18 THEN NULL ELSE location_by_driver_id END,
+                   location_at = CASE WHEN ?18 THEN (CASE WHEN ?19 IS NULL THEN NULL ELSE ?13 END) ELSE location_at END
                  WHERE id = ?1`,
           params: [
             id,
@@ -288,6 +318,9 @@ export function storesRouter(config: Config, db: Db): Router {
             body.pincode ?? null,
             has('gstin'),
             body.gstin ?? null,
+            has('location'),
+            body.location?.lat ?? null,
+            body.location?.lng ?? null,
           ],
         },
         bumpCatalogStatement(),
@@ -300,12 +333,29 @@ export function storesRouter(config: Config, db: Db): Router {
     res.json({ store: await getStore(id) });
   });
 
+  /** The owner checked a location a driver saved at the shop: it becomes the shop's confirmed location. */
+  router.post('/:id/location/confirm', async (req, res) => {
+    const id = idParam(req.params.id);
+    const [updated] = await db.batch([
+      {
+        sql: `UPDATE stores SET location_status = 'owner', updated_at = ?2 WHERE id = ?1 AND location_status = 'driver'`,
+        params: [id, nowIso()],
+      },
+      bumpCatalogStatement(),
+    ]);
+    const store = await getStore(id);
+    if (!store) throw notFound('Shop not found');
+    if (updated.changes === 0) throw conflict('There is no location from a driver to confirm.');
+    res.json({ store });
+  });
+
   /**
    * Bulk import from CSV / pasted Excel cells. Columns (header row required, any order):
-   * Area, Shop name, Owner, Phone, Address, Pincode, GSTIN, Notes. Missing areas are created.
+   * Area, Shop name, Owner, Phone, Address, Pincode, GSTIN, Latitude, Longitude (or one Location column with
+   * "lat, lng" or a Google Maps link), Notes. Missing areas are created.
    * Shops that already exist (same name in the same area) are not added again, so the same file can be imported
-   * twice; only their Pincode and GSTIN are filled in from the sheet (an empty cell keeps what is saved). So the
-   * owner can download the shop list, fill in those two columns in Excel and import it back.
+   * twice; only their Pincode, GSTIN and location are filled in from the sheet (an empty cell keeps what is
+   * saved). So the owner can download the shop list, fill in those columns in Excel and import it back.
    * Everything is saved in one transaction.
    */
   router.post('/import', async (req, res) => {
@@ -335,18 +385,30 @@ export function storesRouter(config: Config, db: Db): Router {
 
     const [areaRows, storeRows] = await Promise.all([
       db.all<{ id: number; name: string }>('SELECT id, name FROM areas'),
-      db.all<{ id: number; areaId: number; name: string; pincode: string | null; gstin: string | null }>(
-        'SELECT id, area_id AS "areaId", name, pincode, gstin FROM stores',
+      db.all<{ id: number; areaId: number; name: string; pincode: string | null; gstin: string | null; lat: number | null; lng: number | null }>(
+        'SELECT id, area_id AS "areaId", name, pincode, gstin, lat, lng FROM stores',
       ),
     ]);
     // Area key -> existing area id, or the exact name of an area this import creates.
     const areas = new Map<string, number | string>(areaRows.map((a) => [sqlLower(a.name), a.id]));
     const existing = new Set(storeRows.map((s) => `${s.areaId}:${sqlLower(s.name)}`));
     const saved = new Map(storeRows.map((s) => [`${s.areaId}:${sqlLower(s.name)}`, s]));
-    // Existing shop id -> [id, pincode, gstin] to fill in (null = keep what is saved)
-    const updates = new Map<number, [number, string | null, string | null]>();
+    // Existing shop id -> [id, pincode, gstin, lat, lng] to fill in (null = keep what is saved)
+    const updates = new Map<number, [number, string | null, string | null, number | null, number | null]>();
     const newStores: Array<
-      [number | null, string | null, string, string | null, string | null, string | null, string | null, string | null, string | null]
+      [
+        number | null,
+        string | null,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        number | null,
+        number | null,
+      ]
     > = [];
 
     for (let i = 1; i < rows.length; i++) {
@@ -368,6 +430,12 @@ export function storesRouter(config: Config, db: Db): Router {
         result.errors.push({ line, message: (pincode.error ?? gstin.error)! });
         continue;
       }
+      const locationText = col(row, 'location') || (col(row, 'lat') || col(row, 'lng') ? `${col(row, 'lat')}, ${col(row, 'lng')}` : '');
+      const location = parseLatLng(locationText);
+      if (locationText && !location) {
+        result.errors.push({ line, message: 'Location should be "latitude, longitude" (e.g. 32.7311, 74.8573) or a full Google Maps link' });
+        continue;
+      }
       let area = areas.get(sqlLower(areaName));
       if (area === undefined) {
         area = areaName;
@@ -379,9 +447,16 @@ export function storesRouter(config: Config, db: Db): Router {
         const shop = saved.get(key);
         const newPin = pincode.value && pincode.value !== shop?.pincode ? pincode.value : null;
         const newGst = gstin.value && gstin.value !== shop?.gstin ? gstin.value : null;
-        if (shop && (newPin || newGst)) {
+        const newLoc = location && (location.lat !== shop?.lat || location.lng !== shop?.lng) ? location : null;
+        if (shop && (newPin || newGst || newLoc)) {
           const before = updates.get(shop.id);
-          updates.set(shop.id, [shop.id, newPin ?? before?.[1] ?? null, newGst ?? before?.[2] ?? null]);
+          updates.set(shop.id, [
+            shop.id,
+            newPin ?? before?.[1] ?? null,
+            newGst ?? before?.[2] ?? null,
+            newLoc?.lat ?? before?.[3] ?? null,
+            newLoc?.lng ?? before?.[4] ?? null,
+          ]);
         } else if (!shop || !updates.has(shop.id)) {
           result.skippedExisting++;
         }
@@ -398,6 +473,8 @@ export function storesRouter(config: Config, db: Db): Router {
         col(row, 'notes').slice(0, 500) || null,
         pincode.value,
         gstin.value,
+        location?.lat ?? null,
+        location?.lng ?? null,
       ]);
       result.storesCreated++;
     }
@@ -414,11 +491,14 @@ export function storesRouter(config: Config, db: Db): Router {
       }
       for (let i = 0; i < newStores.length; i += IMPORT_CHUNK) {
         statements.push({
-          sql: `INSERT INTO stores (area_id, name, owner_name, phone, address, notes, pincode, gstin, created_at, updated_at)
+          sql: `INSERT INTO stores (area_id, name, owner_name, phone, address, notes, pincode, gstin, lat, lng,
+                                   location_status, location_at, created_at, updated_at)
                 SELECT coalesce(json_extract(j.value, '$[0]'), (SELECT a.id FROM areas a WHERE a.name = json_extract(j.value, '$[1]'))),
                        json_extract(j.value, '$[2]'), json_extract(j.value, '$[3]'), json_extract(j.value, '$[4]'),
                        json_extract(j.value, '$[5]'), json_extract(j.value, '$[6]'), json_extract(j.value, '$[7]'),
-                       json_extract(j.value, '$[8]'), ?2, ?2
+                       json_extract(j.value, '$[8]'), json_extract(j.value, '$[9]'), json_extract(j.value, '$[10]'),
+                       CASE WHEN json_extract(j.value, '$[9]') IS NULL THEN NULL ELSE 'owner' END,
+                       CASE WHEN json_extract(j.value, '$[9]') IS NULL THEN NULL ELSE ?2 END, ?2, ?2
                   FROM json_each(?1) j`,
           params: [JSON.stringify(newStores.slice(i, i + IMPORT_CHUNK)), now],
         });
@@ -428,6 +508,11 @@ export function storesRouter(config: Config, db: Db): Router {
           sql: `UPDATE stores SET
                   pincode = coalesce(json_extract(j.value, '$[1]'), stores.pincode),
                   gstin = coalesce(json_extract(j.value, '$[2]'), stores.gstin),
+                  lat = coalesce(json_extract(j.value, '$[3]'), stores.lat),
+                  lng = coalesce(json_extract(j.value, '$[4]'), stores.lng),
+                  location_status = CASE WHEN json_extract(j.value, '$[3]') IS NULL THEN stores.location_status ELSE 'owner' END,
+                  location_by_driver_id = CASE WHEN json_extract(j.value, '$[3]') IS NULL THEN stores.location_by_driver_id END,
+                  location_at = CASE WHEN json_extract(j.value, '$[3]') IS NULL THEN stores.location_at ELSE ?2 END,
                   updated_at = ?2
                 FROM json_each(?1) AS j
                WHERE stores.id = json_extract(j.value, '$[0]')`,

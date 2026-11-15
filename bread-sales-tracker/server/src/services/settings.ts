@@ -5,16 +5,21 @@ export interface AppSettings {
   businessName: string;
   businessPhone: string;
   billFooter: string;
+  /** How far (metres) from a shop's saved location a driver may be when making a bill or "no bill". */
+  visitRadiusM: number;
 }
+
+export const DEFAULT_VISIT_RADIUS_M = 100;
 
 const KEYS: Record<keyof AppSettings, string> = {
   businessName: 'business_name',
   businessPhone: 'business_phone',
   billFooter: 'bill_footer',
+  visitRadiusM: 'visit_radius_m',
 };
 
 export function defaultSettings(config: Pick<Config, 'defaultBusinessName'>): AppSettings {
-  return { businessName: config.defaultBusinessName, businessPhone: '', billFooter: 'Thank you!' };
+  return { businessName: config.defaultBusinessName, businessPhone: '', billFooter: 'Thank you!', visitRadiusM: DEFAULT_VISIT_RADIUS_M };
 }
 
 export async function getSettings(db: Db, config: Pick<Config, 'defaultBusinessName'>): Promise<AppSettings> {
@@ -23,9 +28,17 @@ export async function getSettings(db: Db, config: Pick<Config, 'defaultBusinessN
   const result = defaultSettings(config);
   for (const [field, key] of Object.entries(KEYS) as Array<[keyof AppSettings, string]>) {
     const value = map.get(key);
-    if (value !== undefined) result[field] = value;
+    if (value === undefined) continue;
+    if (field === 'visitRadiusM') result.visitRadiusM = Number(value) > 0 ? Number(value) : DEFAULT_VISIT_RADIUS_M;
+    else result[field] = value;
   }
   return result;
+}
+
+/** The allowed distance from a shop, in metres (one small query). */
+export async function visitRadius(db: Db): Promise<number> {
+  const value = Number(await getSetting(db, KEYS.visitRadiusM));
+  return value > 0 ? value : DEFAULT_VISIT_RADIUS_M;
 }
 
 export function setSettingStatement(key: string, value: string): Statement {
@@ -60,7 +73,7 @@ export async function updateSettings(db: Db, patch: Partial<AppSettings>): Promi
   const statements: Statement[] = [];
   for (const [field, key] of Object.entries(KEYS) as Array<[keyof AppSettings, string]>) {
     const value = patch[field];
-    if (value !== undefined) statements.push(setSettingStatement(key, value));
+    if (value !== undefined) statements.push(setSettingStatement(key, String(value)));
   }
   if (statements.length) await db.batch([...statements, bumpCatalogStatement()]);
 }

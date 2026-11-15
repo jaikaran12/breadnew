@@ -112,3 +112,15 @@ export const IconBasket = ({ size, className }: P) => (
 export const IconTag = ({ size, className }: P) => (
   <svg {...base(size)} className={className}><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></svg>
 );
+/** Route: dots joined by a path (today's route). */
+export const IconRoute = ({ size, className }: P) => (
+  <svg {...base(size)} className={className}><circle cx="6" cy="19" r="2.5" /><circle cx="18" cy="5" r="2.5" /><path d="M8.5 19H16a3.5 3.5 0 0 0 0-7H8a3.5 3.5 0 0 1 0-7h7.5" /></svg>
+);
+/** Navigation arrow (directions in Google Maps). */
+export const IconNavigate = ({ size, className }: P) => (
+  <svg {...base(size)} className={className}><path d="M3 11l18-8-8 18-2-8z" /></svg>
+);
+/** Circle with a line (no bill). */
+export const IconBan = ({ size, className }: P) => (
+  <svg {...base(size)} className={className}><circle cx="12" cy="12" r="9" /><path d="M5.6 5.6l12.8 12.8" /></svg>
+);

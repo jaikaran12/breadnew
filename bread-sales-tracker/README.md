@@ -27,18 +27,24 @@ A simple system for a bakery that sells bread to kirana shops from delivery auto
 | Screen | What the driver does |
 | --- | --- |
 | Login | Mobile number + 4–6 digit PIN (once — the app stays logged in) |
-| Home | Today's total, **New bill**, **My bills**. Shows if any bills are waiting for internet |
+| Home | Today's total, **today's route** (shops done, next shop), **New bill**, **My bills**. Shows if any bills are waiting for internet |
+| Today's route | The driver's shops in order, the **next shop** first with its distance, and three big buttons: **Directions** (opens Google Maps), **Bill**, **No bill** (with why: shop closed / enough stock / owner not there / other). Done shops show their bill or “no bill”. **Open next shops in Maps** shows the next stops as one trip. A shop with no saved location can be saved by the driver standing at it |
 | Area → Shop | Big area buttons, then the shops of that area (with search). Shops already billed today get a ✓ and the amount. The search box on the area screen searches all shops |
 | Items | All products with colour, name, local name and price. **+ / −** buttons, or tap the number to type it on a calculator pad (e.g. 24). The total updates live at the bottom. Shops with special rates get their discount automatically (the normal price is struck out, e.g. “5% off”) |
 | Expired return | A second tab on the same screen: count the **expired items taken back**, with the same + / − buttons (amber). Each one is valued at that shop's rate (after its discount) and **comes off the bill**. Fresh pieces given in their place go on the Sale tab as usual, so swapping one expired loaf for a fresh one comes to ₹0. The bar at the bottom shows the **Net amount** |
 | Check bill | Bill table (item, qty, rate, amount) with each discount, then the expired items taken back (minus amounts), then **Given − Returned = Net amount** in large digits, and how the shop paid: **Cash / UPI / Udhaar**. Nothing to pay (a pure swap) skips the payment question; if the returns are worth more than what was given, the bill says **Give back to shop ₹…** and asks how the money was given back |
-| Saved | Big ✓ and the amount. **Share bill** on WhatsApp, **Next shop** |
+| Saved | Big ✓ and the amount, and whether it was made **at the shop** (or far / no GPS). **Share bill** on WhatsApp, **Next shop** (back to the route) |
 | My bills | Bills for today, yesterday or any date. Shows **Cash to hand over** (net of money given back), UPI, udhaar and the expired items taken back with their value. Each bill can be opened and shared, and cancelled within 30 minutes if it was a mistake |
 | Add shop | If a new kirana shop wants bread, the driver can add it on the spot (marked “added by driver” on your website) |
 
 **Works without internet.** Bills are saved on the phone first and sent automatically when the internet comes
 back. The same bill is never counted twice. The shop list and prices are kept on the phone and refreshed
 automatically when there is internet.
+
+**Where each visit happened is recorded.** Every bill and “no bill” saves the phone's GPS position. The
+server compares it with the shop's saved location: within the distance you allow (Settings) it is **at the
+shop**; farther it is flagged **far**; with GPS off or not allowed it is flagged **no GPS**. Bills are never
+blocked, only flagged — the driver sees the warning before saving.
 
 **Totals are always correct.** Prices come only from your website (drivers cannot change them).
 All money is calculated in whole paise, and the server checks every bill total again before saving it.
@@ -51,12 +57,14 @@ All money is calculated in whole paise, and the server checks every bill total a
 | **Sales (bills)** | Every bill with filters (dates, driver, area, payment, cancelled, shop name or bill number). Open a bill to see the items; cancel a wrong bill (with a reason) or restore it. Download as CSV (opens in Excel), or **Download for Tally (Excel)** — the bills in your Tally bulk-upload format |
 | **Cash tally** | At the end of the day: for each driver, **cash expected** (cash bills only, after any money given back to shops), UPI, udhaar and how many expired items they should bring back (and their value taken off bills). Type the cash handed over and the page shows **Short ₹… / Extra ₹… / Matches**. If a late bill arrives after you tallied, the page warns you. After you tally a day, the driver can no longer cancel bills from that day on the phone |
 | **Reports** | Any date range, grouped by product, shop, area, driver or day. Amounts are **net** (given − expired taken back), with the discount given and the expired items taken back (units and ₹), and CSV download |
-| **Shops (kirana)** | Search, filter by area, find shops with no bill for 3/7/30 days, add/edit/remove shops (with **pincode** and **GSTIN** for Tally), see each shop's purchases (what they buy, average bill, udhaar, recent bills). **Import your whole shop list from Excel** (optional Pincode and GSTIN columns) |
+| **Routes** | Make delivery routes: name, driver, days of the week, and the shops in order (add by search or a whole area, move up/down, **Order by nearest**), shown on a map with the route line |
+| **Route check** | For any day and driver: each planned shop **visited or missed**, when, bill or “no bill” (with the reason), and where the phone was — **at the shop / far (with the distance) / no GPS** — plus shops visited out of order or off the route, on a map |
+| **Shops (kirana)** | Search, filter by area, find shops with no bill for 3/7/30 days or with **no location yet / location to check**, set each shop's **location on a map** (paste coordinates or a Google Maps link, click the map, or confirm the one a driver saved), add/edit/remove shops (with **pincode** and **GSTIN** for Tally), see each shop's purchases (what they buy, average bill, udhaar, recent bills). **Import your whole shop list from Excel** (optional Pincode and GSTIN columns) |
 | **Areas** | Add/rename areas, set their order in the app |
 | **Products & prices** | Add products, change prices (with price history), colours, order in the app, hide products |
 | **Discounts** | Special rates for some shops: for each product **% off** or **₹ off each**. The driver app takes them off by itself and the bill (and WhatsApp bill) shows the discount. Set them from the Discounts page or a shop's page |
 | **Drivers** | Add drivers (mobile + PIN), change PIN, turn off, log out a lost phone, unlock after wrong PINs, see today's sales and when the app was last used |
-| **Settings** | Business name / phone / bill footer (shown on WhatsApp bills), change password, add more admin users (manager, accountant) |
+| **Settings** | Business name / phone / bill footer (shown on WhatsApp bills), **allowed distance from a shop** for the visit check, change password, add more admin users (manager, accountant) |
 
 The website also works on a phone.
 
@@ -274,6 +282,10 @@ screen**. It is the same app.
    डालें (1 एक्सपायरी के बदले 1 नई = ₹0)। बिल में **दिया माल − वापस माल = नेट रकम** दिखती है; दुकान नेट रकम देती है।
    अगर वापसी ज़्यादा हो तो बिल **दुकान को वापस दें ₹…** दिखाएगा। शाम को एक्सपायरी माल मालिक को दें।
 9. कुछ दुकानों को **खास रेट (छूट)** मिलता है — ऐप उसे अपने आप लगाता है। आपको कुछ नहीं करना, बस कुल रकम लें।
+10. **आज का रूट:** होम पर **आज का रूट** दबाएँ। सबसे ऊपर **अगली दुकान** है: **रास्ता** दबाने से Google Maps में रास्ता
+    खुलता है। दुकान पर पहुँचकर **बिल** बनाएँ, या बिल न बने तो **बिल नहीं** दबाकर वजह चुनें। बिल हमेशा **दुकान पर खड़े
+    होकर** ही बनाएँ — ऐप आपकी लोकेशन लेता है, दूर से बने बिल "दूर" दर्ज होते हैं। फ़ोन में **लोकेशन चालू** रखें और ऐप को
+    इजाज़त दें। जिस दुकान की लोकेशन सेव नहीं है, वहाँ पहुँचकर **इस दुकान की लोकेशन सेव करें** दबाएँ।
 
 ---
 
@@ -288,6 +300,23 @@ screen**. It is the same app.
 * **Price change?** Edit the product. Phones pick up the new price within a few minutes when online. Bills
   made earlier keep their old price. A bill made with an old price list is marked “Old rate”. A % discount
   follows the new price; a “₹ off each” discount stays the same amount.
+* **Routes and visit checks:**
+  1. **Shop locations.** Each shop needs its place on the map. On a shop's page (Location): paste coordinates
+     (`32.7311, 74.8573`) or a full Google Maps link, or click the map and drag the pin. For many shops at once:
+     Shops → Download list, fill in Latitude/Longitude (or a Location column with a Google Maps link), Import.
+     Easiest: drivers save it — on the route, at a shop without a location, **Save this shop's location**; it
+     shows as “location to check” (Shops → Location filter) until you look at the pin and **Confirm location**.
+  2. **Routes.** Routes → New route: name, driver, days, then add the shops in order (search, or “Add all shown”
+     for a whole area), fix the order with the arrows or **Order by nearest**, check it on the map, Save. The
+     driver's phone shows it the next time it has internet.
+  3. **Allowed distance.** Settings → Visit check: how far from the shop's pin a bill may be made (default 100 m;
+     phone GPS is usually right to 5–30 m, allow 100–150 m in narrow lanes).
+  4. **Checking.** The dashboard shows today's route check; **Route check** shows each driver's day: missed shops,
+     visits out of order, and every bill / “no bill” with **at the shop**, **far** (with the distance, a red dot
+     and a dashed line on the map) or **no GPS**. Bills also carry this badge on the Sales page.
+  Limits: a phone with a fake-GPS app can fool any app — watch for drivers who are always exactly at the shop
+  but sell little, or who often show **no GPS**. Bills made before this feature, or on phones not yet updated,
+  show no location.
 * **Tally:** Sales → pick the dates → **Download for Tally (Excel)** → import the file in Tally. The file
   copies your template exactly: one sheet “Accounting Voucher”, the same 37 column headings in the same
   order, one row per item, the bill number as the voucher number on every row of that bill, the date as
@@ -407,7 +436,9 @@ All amounts are integers in **paise** (₹42.50 = `4250`). Dates are `YYYY-MM-DD
 | `POST /api/driver/login` | driver | `{phone, pin}` → `{token, driver}` |
 | `GET /api/driver/catalog` | driver | areas, shops, products with prices, business info |
 | `POST /api/driver/sales` | driver | save a bill `{clientId, storeId, soldAt, paymentMode, items[{productId, quantity, unitPricePaise, discount?}], returns?[{productId, quantity, unitPricePaise, discount?}], totalPaise}`; `totalPaise` is the net amount (given − returned, may be below zero). Sending the same `clientId` again returns the saved bill |
-| `GET /api/driver/sales?date=` | driver | own bills for a day |
+| `GET /api/driver/sales?date=` | driver | own bills and "no bill" visits for a day |
+| `POST /api/driver/visits` | driver | "no bill" visit `{clientId, storeId, reason, note?, visitedAt, location?: {lat, lng, accuracy, at}, routeId?}` (bills carry `visit: {location, routeId}`) |
+| `POST /api/driver/stores/:id/location` | driver | save the location of a shop that has none (`{lat, lng, accuracy}`; the owner confirms it) |
 | `POST /api/driver/sales/:id/cancel` | driver | cancel own bill (time limit, not after the day is tallied) |
 | `POST /api/driver/stores` | driver | add a shop |
 | `POST /api/admin/login` | admin | sets the login cookie |

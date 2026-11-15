@@ -42,7 +42,7 @@ describe('database upgrade 0002 (discounts and returns)', () => {
                      si.quantity, si.unit_price_paise, si.line_total_paise
                 FROM sales s JOIN sale_items si ON si.sale_id = s.id ORDER BY si.id`);
     const before = await snapshot();
-    expect(await migrate(db, () => undefined)).toEqual(['0002_discounts_returns.sql', '0003_returns_on_bill.sql', '0004_store_tally_details.sql']);
+    expect(await migrate(db, () => undefined)).toEqual(['0002_discounts_returns.sql', '0003_returns_on_bill.sql', '0004_store_tally_details.sql', '0005_routes_visits.sql']);
     expect(await snapshot()).toEqual(before);
     expect(await db.all('PRAGMA foreign_key_check')).toEqual([]);
     expect(await db.first('PRAGMA integrity_check')).toEqual({ integrity_check: 'ok' });
@@ -119,7 +119,7 @@ describe('database upgrade 0003 (returns on the bill)', () => {
       other: await db.all('SELECT (SELECT count(*) FROM store_discounts) AS d, (SELECT count(*) FROM settlements) AS t'),
     });
     const before = await snapshot();
-    expect(await migrate(db, () => undefined)).toEqual(['0003_returns_on_bill.sql', '0004_store_tally_details.sql']);
+    expect(await migrate(db, () => undefined)).toEqual(['0003_returns_on_bill.sql', '0004_store_tally_details.sql', '0005_routes_visits.sql']);
     expect(await snapshot()).toEqual(before);
     expect(await db.all('PRAGMA foreign_key_check')).toEqual([]);
     expect(await db.first('PRAGMA integrity_check')).toEqual({ integrity_check: 'ok' });
@@ -185,7 +185,7 @@ describe('database upgrade 0004 (pincode and GSTIN for Tally)', () => {
                                                                      (2, 1, 'Gupta Store', NULL, NULL, NULL);
     `);
     const before = await db.all('SELECT id, area_id, name, owner_name, phone, address, is_active FROM stores ORDER BY id');
-    expect(await migrate(db, () => undefined)).toEqual(['0004_store_tally_details.sql']);
+    expect(await migrate(db, () => undefined)).toEqual(['0004_store_tally_details.sql', '0005_routes_visits.sql']);
     expect(await db.all('SELECT id, area_id, name, owner_name, phone, address, is_active FROM stores ORDER BY id')).toEqual(before);
     expect(await db.all('SELECT pincode, gstin FROM stores ORDER BY id')).toEqual([
       { pincode: null, gstin: null },

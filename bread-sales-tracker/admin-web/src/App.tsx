@@ -9,6 +9,8 @@ import { DriversPage } from './pages/Drivers';
 import { LoginPage } from './pages/Login';
 import { ProductsPage } from './pages/Products';
 import { ReportsPage } from './pages/Reports';
+import { RouteCheckPage } from './pages/RouteCheck';
+import { RouteEditPage, RoutesPage } from './pages/Routes';
 import { SalesPage } from './pages/Sales';
 import { SettingsPage } from './pages/Settings';
 import { StoreDetailPage } from './pages/StoreDetail';
@@ -34,6 +36,9 @@ export function App() {
           <Route path="sales" element={<SalesPage />} />
           <Route path="tally" element={<TallyPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="routes" element={<RoutesPage />} />
+          <Route path="routes/:id" element={<RouteEditPage />} />
+          <Route path="route-check" element={<RouteCheckPage />} />
           <Route path="stores" element={<StoresPage />} />
           <Route path="stores/:id" element={<StoreDetailPage />} />
           <Route path="areas" element={<AreasPage />} />

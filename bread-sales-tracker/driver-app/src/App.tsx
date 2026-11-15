@@ -9,6 +9,8 @@ import { DoneScreen } from './screens/Done';
 import { HomeScreen } from './screens/Home';
 import { LoginScreen } from './screens/Login';
 import { ReviewScreen } from './screens/Review';
+import { RouteScreen } from './screens/Route';
+import { startGps, stopGps } from './location';
 import { AddShopScreen, ShopsScreen } from './screens/Shops';
 import { startApp, useAppState } from './store';
 
@@ -39,6 +41,13 @@ export function App() {
     window.scrollTo(0, 0);
   }, [screen]);
 
+  // The GPS runs only on the route and bill screens (saves battery); bills and "no bills" record where the phone is.
+  const gpsWanted = Boolean(s.auth) && ['route', 'cart', 'review'].includes(screen.name);
+  useEffect(() => {
+    if (gpsWanted) startGps();
+    else stopGps();
+  }, [gpsWanted]);
+
   document.documentElement.lang = s.lang;
 
   let body: ReactElement;
@@ -53,6 +62,9 @@ export function App() {
         break;
       case 'addShop':
         body = <AddShopScreen areaId={screen.areaId} />;
+        break;
+      case 'route':
+        body = <RouteScreen />;
         break;
       case 'cart':
         body = <CartScreen />;

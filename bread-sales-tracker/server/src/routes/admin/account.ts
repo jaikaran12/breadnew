@@ -150,6 +150,7 @@ export function adminAccountRouter(config: Config, db: Db): Router {
         businessName: z.string().trim().min(1, 'Business name is required').max(80).optional(),
         businessPhone: z.string().trim().max(20).optional(),
         billFooter: z.string().trim().max(200).optional(),
+        visitRadiusM: z.number().int().min(20, 'At least 20 metres').max(5000, 'At most 5000 metres').optional(),
       })
       .parse(req.body);
     await updateSettings(db, body);

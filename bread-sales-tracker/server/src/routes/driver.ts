@@ -3,7 +3,7 @@ import cors from 'cors';
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import { isUniqueViolation, nowIso, type Db } from '../db.js';
-import { badRequest, forbidden, HttpError, notFound } from '../errors.js';
+import { badRequest, conflict, forbidden, HttpError, notFound } from '../errors.js';
 import {
   burnTime,
   LOCK_MINUTES,
@@ -13,6 +13,7 @@ import {
   verifySecret,
 } from '../auth.js';
 import { getCatalog } from '../services/catalog.js';
+import { createNoBillVisit, NO_BILL_REASONS, VISIT_COLUMNS, type Visit } from '../services/visits.js';
 import {
   attachItems,
   cancelSaleByDriver,
@@ -39,6 +40,29 @@ const discountSchema = z.discriminatedUnion('kind', [
   // paise off each unit
   z.object({ kind: z.literal('amount'), value: z.number().int().min(1).max(10_000_000) }),
 ]);
+
+/** Where the phone was (from its GPS). */
+const locationSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  accuracy: z.number().min(0).max(1_000_000).nullable().optional(),
+  at: z.string().max(40).nullable().optional(),
+});
+
+const visitContext = z
+  .object({ location: locationSchema.nullable().optional(), routeId: z.number().int().positive().nullable().optional() })
+  .nullable()
+  .optional();
+
+const noBillSchema = z.object({
+  clientId: z.uuid(),
+  storeId: z.number().int().positive(),
+  reason: z.enum(NO_BILL_REASONS),
+  note: z.string().trim().max(200).nullable().optional(),
+  visitedAt: z.string().max(40).optional(),
+  location: locationSchema.nullable().optional(),
+  routeId: z.number().int().positive().nullable().optional(),
+});
 
 const saleSchema = z
   .object({
@@ -71,6 +95,8 @@ const saleSchema = z
       .optional(),
     // Net amount: given minus returned (below zero when the shop gets money back).
     totalPaise: z.number().int().min(-10_000_000_000).max(10_000_000_000),
+    // Where the phone was and the route followed (older app versions do not send this).
+    visit: visitContext,
   })
   .refine((b) => b.items.length + (b.returns?.length ?? 0) > 0, { message: 'The bill has no items', path: ['items'] });
 
@@ -157,8 +183,8 @@ export function driverRouter(config: Config, db: Db, loginLimiter: RequestHandle
     res.json({ driver: req.driver, serverTime: new Date().toISOString(), today: todayInZone(config.appTimezone) });
   });
 
-  router.get('/catalog', auth, async (_req, res) => {
-    const catalog = await getCatalog(db, config);
+  router.get('/catalog', auth, async (req, res) => {
+    const catalog = await getCatalog(db, config, req.driver!.id);
     res.set('Cache-Control', 'no-cache');
     res.json({
       ...catalog,
@@ -176,8 +202,46 @@ export function driverRouter(config: Config, db: Db, loginLimiter: RequestHandle
 
   router.post('/sales', auth, async (req, res) => {
     const input = saleSchema.parse(req.body);
-    const { sale, created } = await createSale(db, config, req.driver!.id, input);
-    res.status(created ? 201 : 200).json({ sale, created, catalogVersion: await catalogVersion(db, config) });
+    const { sale, created, visit } = await createSale(db, config, req.driver!.id, input);
+    res.status(created ? 201 : 200).json({ sale, created, visit, catalogVersion: await catalogVersion(db, config) });
+  });
+
+  /** A shop visited without a bill (closed, enough stock, …), with where the phone was. */
+  router.post('/visits', auth, async (req, res) => {
+    const input = noBillSchema.parse(req.body);
+    const { visit, created } = await createNoBillVisit(db, config, req.driver!.id, input);
+    res.status(created ? 201 : 200).json({ visit, created });
+  });
+
+  /**
+   * A driver standing at a shop that has no saved location yet saves it. The owner checks it later on the
+   * website; until then the shop's page shows it as "saved by a driver". A location the owner set cannot be
+   * changed from the phone.
+   */
+  router.post('/stores/:id/location', auth, async (req, res) => {
+    const id = idParam(req.params.id);
+    const body = locationSchema.parse(req.body);
+    if (body.accuracy !== null && body.accuracy !== undefined && body.accuracy > 100) {
+      throw badRequest('The phone location is not exact enough yet. Wait a moment in the open and try again.', {
+        accuracy: body.accuracy,
+      });
+    }
+    const [updated] = await db.batch([
+      {
+        sql: `UPDATE stores SET lat = ?2, lng = ?3, location_status = 'driver', location_by_driver_id = ?4, location_at = ?5,
+                                updated_at = ?5
+               WHERE id = ?1 AND is_active = 1 AND lat IS NULL`,
+        params: [id, body.lat, body.lng, req.driver!.id, nowIso()],
+      },
+      bumpCatalogStatement(),
+    ]);
+    const store = await db.first<{ id: number; lat: number | null; lng: number | null; locationStatus: string | null }>(
+      `SELECT id, lat, lng, location_status AS "locationStatus" FROM stores WHERE id = ?1`,
+      [id],
+    );
+    if (!store) throw notFound('Shop not found');
+    if (updated.changes === 0) throw conflict('This shop already has a location.', { store });
+    res.json({ store });
   });
 
   router.get('/sales', auth, async (req, res) => {
@@ -196,7 +260,21 @@ export function driverRouter(config: Config, db: Db, loginLimiter: RequestHandle
       req.driver!.id,
       date,
     ]);
-    res.json({ date, today, summary, settled: Boolean(settled), sales, cancelWindowMinutes: config.driverCancelWindowMinutes });
+    // Visits without a bill that day (bills carry their own check in `sales`).
+    const visits = await db.all<Visit>(
+      `SELECT ${VISIT_COLUMNS} FROM visits v WHERE v.driver_id = ?1 AND v.visit_date = ?2 AND v.kind = 'no_bill'
+        ORDER BY v.visited_at DESC LIMIT 1000`,
+      [req.driver!.id, date],
+    );
+    res.json({
+      date,
+      today,
+      summary,
+      settled: Boolean(settled),
+      sales,
+      visits,
+      cancelWindowMinutes: config.driverCancelWindowMinutes,
+    });
   });
 
   router.post('/sales/:id/cancel', auth, async (req, res) => {

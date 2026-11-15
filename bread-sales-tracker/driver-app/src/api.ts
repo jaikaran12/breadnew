@@ -1,5 +1,6 @@
 import type { DiscountRule } from './billMath';
-import type { Catalog, Driver, PaymentMode, ServerSale, Store } from './types';
+import type { Fix } from './location';
+import type { Catalog, Driver, NoBillReason, PaymentMode, ServerSale, ServerVisit, Store } from './types';
 
 /** The server answered with an error (wrong PIN, validation problem, ...). */
 export class ApiError extends Error {
@@ -81,9 +82,26 @@ export const api = {
     returns: Array<{ productId: number; quantity: number; unitPricePaise?: number; discount?: DiscountRule }>;
     /** Net amount: given − returned. */
     totalPaise: number;
+    /** Where the phone was and the route followed. */
+    visit?: { location: Fix | null; routeId: number | null };
   }) => request<{ sale: ServerSale; created: boolean; catalogVersion: string }>('POST', '/api/driver/sales', sale),
+  createVisit: (visit: {
+    clientId: string;
+    storeId: number;
+    reason: NoBillReason;
+    note?: string;
+    visitedAt: string;
+    location: Fix | null;
+    routeId: number | null;
+  }) => request<{ visit: ServerVisit; created: boolean }>('POST', '/api/driver/visits', visit),
+  saveStoreLocation: (storeId: number, fix: Fix) =>
+    request<{ store: { id: number; lat: number; lng: number; locationStatus: 'owner' | 'driver' } }>(
+      'POST',
+      `/api/driver/stores/${storeId}/location`,
+      fix,
+    ),
   sales: (date: string) =>
-    request<{ date: string; today: string; settled: boolean; sales: ServerSale[]; cancelWindowMinutes: number }>(
+    request<{ date: string; today: string; settled: boolean; sales: ServerSale[]; visits?: ServerVisit[]; cancelWindowMinutes: number }>(
       'GET',
       `/api/driver/sales?date=${encodeURIComponent(date)}`,
     ),

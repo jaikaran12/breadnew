@@ -1,6 +1,6 @@
 # Headers for the websites served by Cloudflare as static files (the API sets its own headers).
 /*
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; font-src 'self' https: data:; form-action 'self'; frame-ancestors 'self'; img-src 'self' data: blob:; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self' https: 'unsafe-inline'; connect-src 'self'
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; font-src 'self' https: data:; form-action 'self'; frame-ancestors 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org; object-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self' https: 'unsafe-inline'; connect-src 'self'
   Cross-Origin-Opener-Policy: same-origin
   Origin-Agent-Cluster: ?1
   Referrer-Policy: no-referrer
