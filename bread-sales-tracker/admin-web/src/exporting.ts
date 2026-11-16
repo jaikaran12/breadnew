@@ -93,6 +93,10 @@ export function salesCsv(sales: Sale[], type: 'bills' | 'items'): { header: stri
         'Status',
         'Cancelled by',
         'Cancel reason',
+        // Fixed columns for entering the payments as receipts in Tally
+        'Voucher Type',
+        'Top CR/DR',
+        'Bottom CR/DR',
       ],
       rows: sales.map((s) => [
         s.id,
@@ -112,6 +116,9 @@ export function salesCsv(sales: Sale[], type: 'bills' | 'items'): { header: stri
         s.status,
         s.cancelledBy ?? '',
         s.cancelReason ?? '',
+        'Receipt',
+        'Dr',
+        'Cr',
       ]),
     };
   }

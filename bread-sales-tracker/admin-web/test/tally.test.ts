@@ -171,7 +171,7 @@ describe('Tally bulk-upload file', () => {
       0,
       'Roundoff Amount',
       0,
-      'test',
+      '',
       'No',
       'Esc',
     ]);
@@ -243,5 +243,9 @@ describe('Tally bulk-upload file', () => {
     expect(sheet).toMatch(/<c r="Y6"><v>-40\.37<\/v><\/c>/);
     // Empty cells are left out, like Excel does (no GSTIN for bill 12)
     expect(sheet).not.toMatch(/<c r="N3"/);
+    // Voucher Narration (column AI) is blank on every bill row
+    expect(sheet).toContain('<c r="AI1" t="s">');
+    expect(sheet).not.toMatch(/<c r="AI[2-6]"/);
+    expect(sharedList).not.toContain('test');
   });
 });

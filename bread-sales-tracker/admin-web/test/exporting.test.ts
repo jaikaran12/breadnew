@@ -58,8 +58,10 @@ describe('CSV files made in the browser', () => {
       'Net amount (Rs)',
     ]);
     expect(bills.rows).toEqual([
-      [7, '2026-01-31', '08:45 am', 'Ramesh', 'Gandhi Nagar', 'Sharma Kirana', 'UPI', 5, '5.00', '200.00', 2, '70.00', '130.00', 'completed', '', ''],
+      [7, '2026-01-31', '08:45 am', 'Ramesh', 'Gandhi Nagar', 'Sharma Kirana', 'UPI', 5, '5.00', '200.00', 2, '70.00', '130.00', 'completed', '', '', 'Receipt', 'Dr', 'Cr'],
     ]);
+    // Three fixed columns at the end
+    expect(bills.header.slice(-3)).toEqual(['Voucher Type', 'Top CR/DR', 'Bottom CR/DR']);
     const items = salesCsv([sale], 'items');
     // Type, Product, Qty, Rate, Discount, Amount: the amounts of a bill add up to its net amount
     expect(items.rows.map((r) => r.slice(6, 12))).toEqual([

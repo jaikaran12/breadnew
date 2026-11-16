@@ -54,7 +54,7 @@ All money is calculated in whole paise, and the server checks every bill total a
 | Page | Use it for |
 | --- | --- |
 | **Dashboard** | Today's sales, live (refreshes every minute): total, bills, shops visited, cash / UPI / udhaar, per driver, per area, products sold, last 14 days, latest bills |
-| **Sales (bills)** | Every bill with filters (dates, driver, area, payment, cancelled, shop name or bill number). Open a bill to see the items; cancel a wrong bill (with a reason) or restore it. Download as CSV (opens in Excel), or **Download for Tally (Excel)** — the bills in your Tally bulk-upload format |
+| **Sales (bills)** | Every bill with filters (dates, driver, area, payment, cancelled, shop name or bill number). Open a bill to see the items; cancel a wrong bill (with a reason) or restore it. Download as CSV (opens in Excel; the bills file ends with three fixed columns: Voucher Type “Receipt”, Top CR/DR “Dr”, Bottom CR/DR “Cr”), or **Download for Tally (Excel)** — the bills in your Tally bulk-upload format |
 | **Cash tally** | At the end of the day: for each driver, **cash expected** (cash bills only, after any money given back to shops), UPI, udhaar and how many expired items they should bring back (and their value taken off bills). Type the cash handed over and the page shows **Short ₹… / Extra ₹… / Matches**. If a late bill arrives after you tallied, the page warns you. After you tally a day, the driver can no longer cancel bills from that day on the phone |
 | **Reports** | Any date range, grouped by product, shop, area, driver or day. Amounts are **net** (given − expired taken back), with the discount given and the expired items taken back (units and ₹), and CSV download |
 | **Routes** | Make delivery routes: name, driver, days of the week, and the shops in order (add by search or a whole area, move up/down, **Order by nearest**), shown on a map with the route line |
@@ -324,7 +324,7 @@ screen**. It is the same app.
   shop (Regular with a GSTIN, Unregistered/Consumer without). Item rate, Disc% (a “₹ off each” discount is
   turned into a %, e.g. ₹2 off ₹75 = 2.6667%) and amount are exactly as on the bill; Ledger amount = item
   amount. Fixed values as in the template: Bill of Supply, Item Invoice, Jammu & Kashmir, India, Retailer,
-  Sales, Cr/Dr, nos, IGST/CGST/SGST 0, Roundoff Amount 0, narration “test”, QR No, WhattsApp Esc (change them
+  Sales, Cr/Dr, nos, IGST/CGST/SGST 0, Roundoff Amount 0, narration left blank, QR No, WhattsApp Esc (change them
   in `admin-web/src/tally.ts`). Expired returns go in as minus lines so each Tally bill equals the net amount
   (switch this off in the download window to enter them in Tally yourself). Cancelled bills are left out.
   Product and shop names must match your Tally stock items and party ledgers; the window lists shops with no

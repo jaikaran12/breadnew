@@ -72,7 +72,8 @@ export const TALLY = {
   cgst: 'CGST',
   sgst: 'SGST',
   roundOffLedger: 'Roundoff Amount',
-  narration: 'test',
+  /** Left blank. */
+  narration: '',
   paymentLinkQr: 'No',
   whatsApp: 'Esc',
 } as const;
